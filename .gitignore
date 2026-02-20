@@ -1,0 +1,110 @@
+# ========================
+# macOS
+# ========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ========================
+# Xcode
+# ========================
+# Build output
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# User-specific settings
+*.xcodeproj/project.xcworkspace/xcshareddata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+**/*.xcodeproj/project.xcworkspace/xcshareddata/
+**/*.xcworkspace/xcshareddata/
+
+# Playground output
+playground.xcworkspace
+timeline.xctimeline
+
+# ========================
+# Swift Package Manager
+# ========================
+.build/
+.swiftpm/
+*.resolved
+
+# Keep Package.resolved if you want reproducible builds across the team.
+# Remove the line above and uncomment below:
+# !Package.resolved
+
+# ========================
+# CocoaPods (if used)
+# ========================
+Pods/
+*.xcworkspace
+!default.xcworkspace
+
+# ========================
+# Carthage (if used)
+# ========================
+Carthage/Build/
+
+# ========================
+# Fastlane (if used)
+# ========================
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# ========================
+# Code signing
+# ========================
+*.mobileprovision
+*.provisionprofile
+
+# ========================
+# Test output
+# ========================
+results/
+*.xcresult/
+
+# ========================
+# Environment & secrets
+# ========================
+.env
+.env.local
+.env.*.local
+Secrets.swift
+secrets.plist
+*.p8
+*.p12
+*.cer
+*.certSigningRequest
+
+# ========================
+# Editors & IDEs
+# ========================
+# VS Code
+.vscode/
+
+# JetBrains (AppCode)
+.idea/
+*.iml
+
+# Vim/Emacs
+*.swp
+*.swo
+*~
+\#*\#
+
+# ========================
+# Misc
+# ========================
+*.log
+*.tmp

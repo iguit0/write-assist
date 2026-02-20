@@ -1,0 +1,303 @@
+// WriteAssist — macOS menu bar writing assistant
+// Copyright © 2025 Igor Alves. All rights reserved.
+
+import AppKit
+import os
+import SwiftUI
+
+private let logger = Logger(subsystem: "com.writeassist", category: "StatusBarController")
+
+/// Manages the macOS menu bar status item and attaches an `NSPopover`
+/// containing the WriteAssist suggestions panel.
+///
+/// All mutable state is on `@MainActor`. `@unchecked Sendable` is required
+/// for callbacks captured across actor boundaries in Task closures.
+@MainActor
+final class StatusBarController: NSObject, @unchecked Sendable {
+
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
+    private var eventMonitor: Any?
+    private var hudPanel: ErrorHUDPanel?
+    private var isAnimating = false
+
+    // MARK: - Setup
+
+    private weak var viewModel: DocumentViewModel?
+    private var badgeObserver: Task<Void, Never>?
+
+    func setup(viewModel: DocumentViewModel, inputMonitor: GlobalInputMonitor) {
+        self.viewModel = viewModel
+        hudPanel = ErrorHUDPanel()
+
+        // Create the status bar item — use variableLength so the button
+        // is always visible even if the image fails to load.
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.wantsLayer = true
+            // SF Symbol lookup can return nil when running without a bundle
+            // (common in SPM-built apps). Use a Unicode emoji as a guaranteed
+            // fallback so the menu bar item is always visible.
+            // Try multiple symbol names in order of availability,
+            // fall back to emoji if none resolve (common in SPM builds).
+            let symbolNames = ["pencil.and.sparkles", "pencil.circle.fill", "pencil"]
+            var resolved = false
+            for name in symbolNames {
+                if let img = NSImage(systemSymbolName: name,
+                                     accessibilityDescription: "WriteAssist") {
+                    img.isTemplate = true
+                    button.image = img
+                    resolved = true
+                    break
+                }
+            }
+            if !resolved {
+                button.title = "✏️"
+            }
+            button.action = #selector(StatusBarController.togglePopover)
+            button.target = self
+        }
+        statusItem = item
+
+        // Watch for issue count changes and update the badge
+        startBadgeObserver(viewModel: viewModel)
+
+        // Direct callback: fires from runCheck() as soon as spell-check completes —
+        // no polling lag. Shows the HUD for the first issue in the list.
+        viewModel.onNewIssuesReadyForHUD = { [weak self] issues in
+            guard let self else { return }
+            // Don't show HUD if the sidebar popover is already visible
+            guard self.popover?.isShown != true else {
+                logger.debug("onNewIssuesReadyForHUD: popover visible — skipping HUD")
+                return
+            }
+            // Don't show HUD while a correction is being applied
+            guard !viewModel.isCorrectionInFlight else {
+                logger.debug("onNewIssuesReadyForHUD: correction in flight — skipping HUD")
+                return
+            }
+            if let first = issues.first {
+                logger.info("onNewIssuesReadyForHUD: showing HUD for '\(first.word)' (\(issues.count) pending)")
+                self.hudPanel?.show(issue: first, viewModel: viewModel)
+            }
+        }
+
+        // Dismiss the inline popup immediately when the user types (no 500ms lag)
+        inputMonitor.onKeystroke = { [weak self] in
+            Task { @MainActor in
+                if self?.hudPanel != nil {
+                    logger.debug("onKeystroke: dismissing HUD on user typing")
+                }
+                self?.hudPanel?.dismiss()
+            }
+        }
+
+        // Create the popover
+        let pop = NSPopover()
+        pop.contentSize = NSSize(width: 320, height: 500)
+        pop.behavior = .transient
+        pop.animates = true
+        pop.contentViewController = NSHostingController(
+            rootView: MenuBarPopoverView(
+                viewModel: viewModel,
+                inputMonitor: inputMonitor
+            )
+        )
+        popover = pop
+
+        // Monitor clicks outside to close popover
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.closePopover()
+            }
+        }
+    }
+
+    func teardown() {
+        badgeObserver?.cancel()
+        badgeObserver = nil
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        eventMonitor = nil
+        hudPanel?.dismiss()
+        hudPanel = nil
+        statusItem = nil
+        popover = nil
+    }
+
+    // MARK: - Badge
+
+    /// Poll the view model periodically to update the badge count and animate
+    /// the status bar icon when new issues are detected.
+    /// HUD display is handled via the direct `onNewIssuesReadyForHUD` callback
+    /// (set up in `setup()`) to avoid polling latency.
+    private func startBadgeObserver(viewModel: DocumentViewModel) {
+        badgeObserver = Task { @MainActor [weak self] in
+            var lastCount = -1
+            var lastUnseenCount = 0
+            while !Task.isCancelled {
+                let count = viewModel.issues.filter { !$0.isIgnored }.count
+                if count != lastCount {
+                    lastCount = count
+                    self?.updateBadge(count: count)
+                }
+
+                // Animate the status bar icon when new unseen issues arrive
+                let unseenCount = viewModel.unseenIssueIDs.count
+                if unseenCount > lastUnseenCount && unseenCount > 0 {
+                    self?.animateNewErrors(viewModel: viewModel)
+                }
+                lastUnseenCount = unseenCount
+
+                do {
+                    try await Task.sleep(for: .milliseconds(300))
+                } catch {
+                    break // Task cancelled — exit loop cleanly
+                }
+            }
+        }
+    }
+
+    private func updateBadge(count: Int) {
+        guard let button = statusItem?.button else { return }
+        if count > 0 {
+            // Draw a composed image: pencil + small red badge with count
+            button.image = makeBadgedIcon(count: count)
+        } else {
+            // Reset to plain template pencil (no badge)
+            button.image = plainPencilImage()
+        }
+    }
+
+    private func plainPencilImage() -> NSImage? {
+        let symbolNames = ["pencil.and.sparkles", "pencil.circle.fill", "pencil"]
+        for name in symbolNames {
+            if let img = NSImage(systemSymbolName: name, accessibilityDescription: "WriteAssist") {
+                img.isTemplate = true
+                return img
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Error Animation
+
+    /// Briefly cycles the status bar icon between the alert icon and the
+    /// normal badge to draw the user's attention when new errors appear.
+    private func animateNewErrors(viewModel: DocumentViewModel) {
+        guard !isAnimating, let button = statusItem?.button else { return }
+        isAnimating = true
+        let currentImage = button.image
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<3 {
+                button.image = self.makeAlertIcon()
+                try? await Task.sleep(for: .milliseconds(140))
+                button.image = currentImage
+                try? await Task.sleep(for: .milliseconds(140))
+            }
+            // Restore the correct badge state after animation
+            let count = viewModel.issues.filter { !$0.isIgnored }.count
+            self.updateBadge(count: count)
+            self.isAnimating = false
+        }
+    }
+
+    /// A small orange warning triangle used during the flash animation.
+    private func makeAlertIcon() -> NSImage {
+        let size = NSSize(width: 22, height: 18)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        if let img = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                             accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(paletteColors: [.systemOrange])
+            let tinted = img.withSymbolConfiguration(config) ?? img
+            tinted.draw(
+                in: NSRect(x: 3, y: 1, width: 16, height: 16),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0
+            )
+        }
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func makeBadgedIcon(count: Int) -> NSImage {
+        let size = NSSize(width: 22, height: 18)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        // Draw base pencil icon (non-template so it renders with actual color)
+        if let img = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil) {
+            img.isTemplate = false
+            img.draw(
+                in: NSRect(x: 0, y: 1, width: 14, height: 14),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 0.85
+            )
+        }
+
+        // Draw red badge circle
+        let badgeRect = NSRect(x: 12, y: 8, width: 10, height: 10)
+        NSColor.systemRed.setFill()
+        NSBezierPath(ovalIn: badgeRect).fill()
+
+        // Draw count number
+        let label = count > 9 ? "9+" : "\(count)"
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 7, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        let str = NSAttributedString(string: label, attributes: attrs)
+        let strSize = str.size()
+        let strOrigin = NSPoint(
+            x: badgeRect.midX - strSize.width / 2,
+            y: badgeRect.midY - strSize.height / 2
+        )
+        str.draw(at: strOrigin)
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    // MARK: - Popover Toggle
+
+    @objc
+    func togglePopover() {
+        if let pop = popover, pop.isShown {
+            closePopover()
+        } else {
+            openPopover()
+        }
+    }
+
+    private func openPopover() {
+        guard
+            let pop = popover,
+            let button = statusItem?.button
+        else { return }
+        pop.show(
+            relativeTo: button.bounds,
+            of: button,
+            preferredEdge: .minY
+        )
+        // Mark all issues as seen when the popover opens
+        viewModel?.markAllSeen()
+        // Note: NSApp.activate() is intentionally omitted for .accessory-policy apps.
+        // Activating WriteAssist would steal AX focus from the user's text editor,
+        // breaking correction injection. .transient popovers attached to status items
+        // receive keyboard focus without app activation.
+    }
+
+    private func closePopover() {
+        popover?.performClose(nil)
+    }
+}
