@@ -60,19 +60,31 @@ final class ErrorHUDPanel {
         showGeneration &+= 1
         let generation = showGeneration
 
-        let contentView = InlineSuggestionView(issue: issue) { [weak self, weak viewModel] suggestion in
-            logger.debug("onApply: user selected '\(suggestion)' for '\(issue.word)'")
-            // Dismiss first (starts fade-out animation), then apply correction.
-            self?.dismiss()
-            viewModel?.applyCorrection(issue, correction: suggestion)
-        } onIgnore: { [weak self, weak viewModel] in
-            logger.debug("onIgnore: user ignored '\(issue.word)'")
+        let addToDictionary: (() -> Void)? = issue.type == .spelling ? { [weak self, weak viewModel] in
+            logger.debug("onAddToDictionary: adding '\(issue.word)' to dictionary")
+            PersonalDictionary.shared.addWord(issue.word)
             viewModel?.ignoreIssue(issue)
             self?.dismiss()
-        } onDismiss: { [weak self] in
-            logger.debug("onDismiss: user dismissed HUD")
-            self?.dismiss()
-        }
+        } : nil
+
+        let contentView = InlineSuggestionView(
+            issue: issue,
+            onApply: { [weak self, weak viewModel] suggestion in
+                logger.debug("onApply: user selected '\(suggestion)' for '\(issue.word)'")
+                self?.dismiss()
+                viewModel?.applyCorrection(issue, correction: suggestion)
+            },
+            onIgnore: { [weak self, weak viewModel] in
+                logger.debug("onIgnore: user ignored '\(issue.word)'")
+                viewModel?.ignoreIssue(issue)
+                self?.dismiss()
+            },
+            onDismiss: { [weak self] in
+                logger.debug("onDismiss: user dismissed HUD")
+                self?.dismiss()
+            },
+            onAddToDictionary: addToDictionary
+        )
 
         // Force a layout pass before reading fittingSize so SwiftUI has had a
         // chance to measure the view. Without this, fittingSize can return zero.
@@ -289,6 +301,39 @@ final class ErrorHUDPanel {
     }
 }
 
+// MARK: - Keyboard Navigation State
+
+/// Shared state between ErrorHUDPanel (key monitor) and InlineSuggestionView
+/// (rendering). ErrorHUDPanel mutates; InlineSuggestionView observes.
+@MainActor
+@Observable
+final class HUDKeyboardState {
+    var selectedIndex: Int?
+    let suggestionCount: Int
+
+    init(suggestionCount: Int) {
+        self.suggestionCount = suggestionCount
+    }
+
+    func moveDown() {
+        guard suggestionCount > 0 else { return }
+        if let current = selectedIndex {
+            selectedIndex = (current + 1) % suggestionCount
+        } else {
+            selectedIndex = 0
+        }
+    }
+
+    func moveUp() {
+        guard suggestionCount > 0 else { return }
+        if let current = selectedIndex {
+            selectedIndex = (current - 1 + suggestionCount) % suggestionCount
+        } else {
+            selectedIndex = suggestionCount - 1
+        }
+    }
+}
+
 // MARK: - Inline Suggestion Content View
 
 /// The rich inline popup content — reuses SuggestionPopover layout with a
@@ -298,11 +343,14 @@ private struct InlineSuggestionView: View {
     let onApply: (String) -> Void
     let onIgnore: () -> Void
     let onDismiss: () -> Void
+    let onAddToDictionary: (() -> Void)?
 
     @State private var hoveredSuggestion: String?
+    @State private var isRewriting = false
+    @State private var rewriteResult: String?
 
     private var accentColor: Color {
-        issue.type == .spelling ? .red : .orange
+        issue.type.color
     }
 
     var body: some View {
@@ -312,7 +360,10 @@ private struct InlineSuggestionView: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(accentColor)
                     .frame(width: 3, height: 14)
-                Text(issue.type == .spelling ? "Spelling" : "Grammar")
+                Image(systemName: issue.type.icon)
+                    .font(.system(size: 10))
+                    .foregroundStyle(accentColor)
+                Text(issue.type.categoryLabel)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(accentColor)
                 Text("·")
@@ -386,22 +437,117 @@ private struct InlineSuggestionView: View {
                 .padding(.top, 4)
             }
 
+            // AI Rewrite (if configured)
+            if CloudAIService.shared.isConfigured {
+                Divider().padding(.horizontal, 8).padding(.top, 4)
+
+                if let rewrite = rewriteResult {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.indigo)
+                        Text("AI:")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.indigo)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+
+                    Button {
+                        onApply(rewrite)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.indigo)
+                                .frame(width: 12)
+                            Text(rewrite)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .lineLimit(3)
+                            Spacer()
+                        }
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } else if isRewriting {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("Rewriting...")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                } else {
+                    Button {
+                        isRewriting = true
+                        Task {
+                            do {
+                                let result = try await CloudAIService.shared.rewrite(
+                                    text: issue.word, style: .clearer
+                                )
+                                rewriteResult = result
+                            } catch {
+                                // Silently fail — AI is optional
+                            }
+                            isRewriting = false
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 9))
+                            Text("AI Rewrite")
+                                .font(.system(size: 10))
+                        }
+                        .foregroundStyle(.indigo)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
             Divider().padding(.horizontal, 8).padding(.top, 4)
 
-            // Ignore button
-            Button(action: onIgnore) {
-                HStack(spacing: 5) {
-                    Image(systemName: "xmark.circle")
-                        .font(.system(size: 10))
-                    Text("Ignore")
-                        .font(.system(size: 11))
+            // Action buttons
+            HStack(spacing: 12) {
+                // Add to dictionary (spelling only)
+                if let onAddToDictionary, issue.type == .spelling {
+                    Button(action: onAddToDictionary) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 10))
+                            Text("Add to Dictionary")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundStyle(.blue)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .contentShape(Rectangle())
+
+                Spacer()
+
+                // Ignore button
+                Button(action: onIgnore) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 10))
+                        Text("Ignore")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
         }
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
