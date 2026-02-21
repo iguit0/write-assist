@@ -26,6 +26,8 @@ final class ErrorHUDPanel {
     /// Minimum gap between dismiss and next show.
     private let showCooldown: Duration = .seconds(1.0)
 
+    private var keyboardState: HUDKeyboardState?
+
     // MARK: - Public API
 
     /// Show the inline suggestion popup anchored near the text cursor.
@@ -67,6 +69,10 @@ final class ErrorHUDPanel {
             self?.dismiss()
         } : nil
 
+        let suggestionCount = min(issue.suggestions.count, 4)
+        let kbState = HUDKeyboardState(suggestionCount: suggestionCount)
+        self.keyboardState = kbState
+
         let contentView = InlineSuggestionView(
             issue: issue,
             onApply: { [weak self, weak viewModel] suggestion in
@@ -83,7 +89,8 @@ final class ErrorHUDPanel {
                 logger.debug("onDismiss: user dismissed HUD")
                 self?.dismiss()
             },
-            onAddToDictionary: addToDictionary
+            onAddToDictionary: addToDictionary,
+            keyboardState: kbState
         )
 
         // Force a layout pass before reading fittingSize so SwiftUI has had a
@@ -127,6 +134,7 @@ final class ErrorHUDPanel {
 
     /// Fade out and remove the HUD panel.
     func dismiss() {
+        keyboardState = nil
         guard let p = panel else { return }
         logger.debug("dismiss: fading out HUD panel")
         panel = nil
@@ -344,6 +352,7 @@ private struct InlineSuggestionView: View {
     let onIgnore: () -> Void
     let onDismiss: () -> Void
     let onAddToDictionary: (() -> Void)?
+    var keyboardState: HUDKeyboardState
 
     @State private var hoveredSuggestion: String?
     @State private var isRewriting = false
@@ -404,7 +413,9 @@ private struct InlineSuggestionView: View {
                     .padding(.top, 6)
             } else {
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(issue.suggestions.prefix(4), id: \.self) { suggestion in
+                    ForEach(
+                        Array(issue.suggestions.prefix(4).enumerated()), id: \.element
+                    ) { index, suggestion in
                         Button {
                             onApply(suggestion)
                         } label: {
@@ -426,7 +437,7 @@ private struct InlineSuggestionView: View {
                         .background(
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(Color.primary.opacity(
-                                    hoveredSuggestion == suggestion ? 0.07 : 0.0
+                                    suggestionOpacity(for: suggestion, at: index)
                                 ))
                         )
                         .onHover { isHovered in
@@ -561,5 +572,14 @@ private struct InlineSuggestionView: View {
         )
         .shadow(color: .black.opacity(0.22), radius: 14, y: 5)
         .padding(2) // prevent shadow clipping
+    }
+
+    private func suggestionOpacity(for suggestion: String, at index: Int) -> Double {
+        if keyboardState.selectedIndex == index {
+            return 0.12
+        } else if hoveredSuggestion == suggestion {
+            return 0.07
+        }
+        return 0.0
     }
 }
