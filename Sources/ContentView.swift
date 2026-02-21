@@ -101,8 +101,6 @@ struct MenuBarPopoverView: View {
                 }
             }
 
-            // Score badge
-            ScoreBadge(score: viewModel.writingScore)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -550,36 +548,7 @@ struct MenuBarPopoverView: View {
 
 // MARK: - Score Badge
 
-struct ScoreBadge: View {
-    let score: Int
 
-    private var color: Color {
-        switch score {
-        case 85...100: return .green
-        case 60..<85:  return .orange
-        default:        return .red
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(color.opacity(0.2), lineWidth: 3)
-                .frame(width: 32, height: 32)
-
-            Circle()
-                .trim(from: 0, to: CGFloat(score) / 100)
-                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .frame(width: 32, height: 32)
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 0.4), value: score)
-
-            Text("\(score)")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(color)
-        }
-    }
-}
 
 // MARK: - Issue Sidebar Card
 
@@ -796,9 +765,9 @@ struct SettingsPanel: View {
                 // AI Provider
                 settingsSection(title: "AI Provider", icon: "sparkles") {
                     Picker("Provider", selection: $aiService.provider) {
-                        ForEach(AIProvider.allCases, id: \.self) { provider in
-                            Text(provider.rawValue).tag(provider)
-                        }
+                        Text("Anthropic").tag(AIProvider.anthropic)
+                        Text("OpenAI").tag(AIProvider.openai)
+                        Text("Ollama").tag(AIProvider.ollama)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -818,35 +787,47 @@ struct SettingsPanel: View {
 
                 // Writing preset
                 settingsSection(title: "Writing Preset", icon: "doc.text") {
-                    Picker("Preset", selection: $prefs.writingPreset) {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                        spacing: 6
+                    ) {
                         ForEach(WritingPreset.allCases, id: \.self) { preset in
-                            Text(preset.rawValue).tag(preset)
+                            pillButton(
+                                preset.rawValue,
+                                isSelected: prefs.writingPreset == preset
+                            ) { prefs.writingPreset = preset }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
 
                 // Formality
                 settingsSection(title: "Formality", icon: "slider.horizontal.3") {
-                    Picker("Formality", selection: $prefs.formalityLevel) {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                        spacing: 6
+                    ) {
                         ForEach(FormalityLevel.allCases, id: \.self) { level in
-                            Text(level.rawValue).tag(level)
+                            pillButton(
+                                level.rawValue,
+                                isSelected: prefs.formalityLevel == level
+                            ) { prefs.formalityLevel = level }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
 
                 // Audience
                 settingsSection(title: "Audience", icon: "person.2") {
-                    Picker("Audience", selection: $prefs.audienceLevel) {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                        spacing: 6
+                    ) {
                         ForEach(AudienceLevel.allCases, id: \.self) { level in
-                            Text(level.rawValue).tag(level)
+                            pillButton(
+                                level.rawValue,
+                                isSelected: prefs.audienceLevel == level
+                            ) { prefs.audienceLevel = level }
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
 
                 // Rule toggles
@@ -922,6 +903,27 @@ struct SettingsPanel: View {
             .labelsHidden()
         }
         .padding(.vertical, 2)
+    }
+
+    private func pillButton(
+        _ title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(
+                    isSelected
+                        ? Color.accentColor
+                        : Color.secondary.opacity(0.12)
+                )
+                .foregroundStyle(isSelected ? .white : .primary)
+                .clipShape(.rect(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Ollama Settings
@@ -1473,12 +1475,14 @@ struct AIChatPanel: View {
     private var aiNotConfiguredView: some View {
         VStack(spacing: 12) {
             Spacer(minLength: 20)
-            Image(systemName: "sparkles")
+            Image(systemName: aiService.provider == .ollama ? "desktopcomputer" : "sparkles")
                 .font(.system(size: 28))
-                .foregroundStyle(.indigo)
-            Text("AI Not Configured")
+                .foregroundStyle(aiService.provider == .ollama ? .orange : .indigo)
+            Text(aiService.provider == .ollama ? "Ollama Not Ready" : "AI Not Configured")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Add your API key in Settings to use AI features like rewrites, suggestions, and chat.")
+            Text(aiService.provider == .ollama
+                 ? "Select a model in Settings. Make sure Ollama is running (`ollama serve`)."
+                 : "Add your API key in Settings to use AI features like rewrites, suggestions, and chat.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
