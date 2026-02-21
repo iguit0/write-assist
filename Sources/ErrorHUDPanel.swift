@@ -559,6 +559,21 @@ private struct InlineSuggestionView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+
+            // Keyboard shortcut hints
+            HStack(spacing: 0) {
+                Text("↑↓ navigate · ↵ apply · i ignore · esc dismiss")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
+                if issue.type == .spelling, onAddToDictionary != nil {
+                    Text(" · d add to dict")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.quaternary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+            .padding(.top, 2)
         }
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
