@@ -32,6 +32,9 @@ final class GlobalInputMonitor {
     /// Used by StatusBarController to dismiss the inline suggestion popup instantly.
     var onKeystroke: (() -> Void)?
 
+    /// Called when a snippet trigger is detected in the buffer.
+    var onSnippetTriggered: ((Snippet) -> Void)?
+
     // MARK: - Polling Timer
 
     private var permissionTimer: Timer?
@@ -202,6 +205,15 @@ final class GlobalInputMonitor {
 
         let text = String(buffer)
         viewModel?.textDidChange(text)
+
+        // Check for snippet trigger
+        checkSnippetTrigger(text: text)
+    }
+
+    private func checkSnippetTrigger(text: String) {
+        if let snippet = SnippetsManager.shared.matchingSnippet(for: text) {
+            onSnippetTriggered?(snippet)
+        }
     }
 
     // MARK: - Buffer

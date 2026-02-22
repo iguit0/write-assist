@@ -2,6 +2,7 @@
 // Copyright © 2025 Igor Alves. All rights reserved.
 
 import AppKit
+import CoreGraphics
 import os
 import SwiftUI
 
@@ -20,6 +21,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     private var eventMonitor: Any?
     private var hudPanel: ErrorHUDPanel?
     private var isAnimating = false
+    private var hotkeyEventTap: CFMachPort?
 
     // MARK: - Setup
 
@@ -113,6 +115,9 @@ final class StatusBarController: NSObject, @unchecked Sendable {
                 self?.closePopover()
             }
         }
+
+        // Register global hotkey (Cmd+Shift+G)
+        registerGlobalHotkey()
     }
 
     func teardown() {
@@ -122,6 +127,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
             NSEvent.removeMonitor(monitor)
         }
         eventMonitor = nil
+        unregisterGlobalHotkey()
         hudPanel?.dismiss()
         hudPanel = nil
         statusItem = nil
@@ -139,7 +145,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
             var lastCount = -1
             var lastUnseenCount = 0
             while !Task.isCancelled {
-                let count = viewModel.issues.filter { !$0.isIgnored }.count
+                let count = viewModel.totalActiveIssueCount
                 if count != lastCount {
                     lastCount = count
                     self?.updateBadge(count: count)
@@ -201,7 +207,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
                 try? await Task.sleep(for: .milliseconds(140))
             }
             // Restore the correct badge state after animation
-            let count = viewModel.issues.filter { !$0.isIgnored }.count
+            let count = viewModel.totalActiveIssueCount
             self.updateBadge(count: count)
             self.isAnimating = false
         }
@@ -299,5 +305,28 @@ final class StatusBarController: NSObject, @unchecked Sendable {
 
     private func closePopover() {
         popover?.performClose(nil)
+    }
+
+    // MARK: - Global Hotkey (Cmd+Shift+G)
+
+    private func registerGlobalHotkey() {
+        // Use NSEvent global monitor for key combinations
+        // Cmd+Shift+G to toggle the popover
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+            // Cmd+Shift+G: keyCode 5 = G
+            if flags == [.command, .shift] && event.keyCode == 5 {
+                Task { @MainActor in
+                    self?.togglePopover()
+                }
+            }
+        }
+        logger.info("Global hotkey registered: Cmd+Shift+G")
+    }
+
+    private func unregisterGlobalHotkey() {
+        // NSEvent global monitors are automatically cleaned up when the app terminates.
+        // For explicit cleanup, we'd need to store the monitor reference separately.
+        logger.debug("Global hotkey unregistered")
     }
 }

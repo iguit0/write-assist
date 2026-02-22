@@ -28,6 +28,20 @@ final class ErrorHUDPanel {
 
     private var keyboardState: HUDKeyboardState?
 
+    /// Global key event monitor, active only while the HUD panel is visible.
+    private var keyMonitor: Any?
+
+    /// Whether the HUD is intercepting keyboard events (panel is shown).
+    /// StatusBarController checks this to avoid dismissing on navigation keys.
+    private(set) var isAcceptingKeyboardInput = false
+
+    /// Stored callbacks for keyboard-triggered actions.
+    private var onApplyCallback: ((String) -> Void)?
+    private var onIgnoreCallback: (() -> Void)?
+    private var onDismissCallback: (() -> Void)?
+    private var onAddToDictionaryCallback: (() -> Void)?
+    private var currentSuggestions: [String] = []
+
     // MARK: - Public API
 
     /// Show the inline suggestion popup anchored near the text cursor.
@@ -73,22 +87,29 @@ final class ErrorHUDPanel {
         let kbState = HUDKeyboardState(suggestionCount: suggestionCount)
         self.keyboardState = kbState
 
+        // Store for keyboard navigation
+        currentSuggestions = Array(issue.suggestions.prefix(4))
+        onApplyCallback = { [weak self, weak viewModel] suggestion in
+            logger.debug("onApply: user selected '\(suggestion)' for '\(issue.word)'")
+            self?.dismiss()
+            viewModel?.applyCorrection(issue, correction: suggestion)
+        }
+        onIgnoreCallback = { [weak self, weak viewModel] in
+            logger.debug("onIgnore: user ignored '\(issue.word)'")
+            viewModel?.ignoreIssue(issue)
+            self?.dismiss()
+        }
+        onDismissCallback = { [weak self] in
+            logger.debug("onDismiss: user dismissed HUD")
+            self?.dismiss()
+        }
+        onAddToDictionaryCallback = addToDictionary
+
         let contentView = InlineSuggestionView(
             issue: issue,
-            onApply: { [weak self, weak viewModel] suggestion in
-                logger.debug("onApply: user selected '\(suggestion)' for '\(issue.word)'")
-                self?.dismiss()
-                viewModel?.applyCorrection(issue, correction: suggestion)
-            },
-            onIgnore: { [weak self, weak viewModel] in
-                logger.debug("onIgnore: user ignored '\(issue.word)'")
-                viewModel?.ignoreIssue(issue)
-                self?.dismiss()
-            },
-            onDismiss: { [weak self] in
-                logger.debug("onDismiss: user dismissed HUD")
-                self?.dismiss()
-            },
+            onApply: { [weak self] suggestion in self?.onApplyCallback?(suggestion) },
+            onIgnore: { [weak self] in self?.onIgnoreCallback?() },
+            onDismiss: { [weak self] in self?.onDismissCallback?() },
             onAddToDictionary: addToDictionary,
             keyboardState: kbState
         )
@@ -129,11 +150,91 @@ final class ErrorHUDPanel {
 
             logger.debug("show: presenting panel at (\(origin.x), \(origin.y))")
             self.presentPanel(hostingView: hostingView, size: hudSize, origin: origin)
+            self.installKeyMonitor()
+        }
+    }
+
+    // MARK: - Keyboard Navigation
+
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        isAcceptingKeyboardInput = true
+
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            Task { @MainActor in
+                self?.handleKeyEvent(event)
+            }
+        }
+        logger.debug("installKeyMonitor: keyboard navigation active")
+    }
+
+    private func removeKeyMonitor() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+        isAcceptingKeyboardInput = false
+    }
+
+    private func handleKeyEvent(_ event: NSEvent) {
+        // Ignore events with command/control/option modifiers
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+        guard modifiers.isEmpty else { return }
+
+        let keyCode = event.keyCode
+
+        switch keyCode {
+        case 125: // Down Arrow
+            keyboardState?.moveDown()
+            logger.debug("handleKeyEvent: ↓ — selectedIndex=\(self.keyboardState?.selectedIndex ?? -1)")
+
+        case 126: // Up Arrow
+            keyboardState?.moveUp()
+            logger.debug("handleKeyEvent: ↑ — selectedIndex=\(self.keyboardState?.selectedIndex ?? -1)")
+
+        case 36, 76: // Return / Enter
+            if let index = keyboardState?.selectedIndex,
+               index < currentSuggestions.count {
+                let suggestion = currentSuggestions[index]
+                logger.debug("handleKeyEvent: ↵ — applying '\(suggestion)'")
+                onApplyCallback?(suggestion)
+            }
+
+        case 53: // Escape
+            logger.debug("handleKeyEvent: esc — dismissing")
+            onDismissCallback?()
+
+        default:
+            // Check for character shortcuts
+            if let chars = event.charactersIgnoringModifiers?.lowercased() {
+                switch chars {
+                case "i":
+                    logger.debug("handleKeyEvent: 'i' — ignoring issue")
+                    onIgnoreCallback?()
+                case "d":
+                    if onAddToDictionaryCallback != nil {
+                        logger.debug("handleKeyEvent: 'd' — adding to dictionary")
+                        onAddToDictionaryCallback?()
+                    } else {
+                        // Not a spelling issue — dismiss and let key pass through
+                        dismiss()
+                    }
+                default:
+                    // Non-navigation key — dismiss HUD
+                    dismiss()
+                }
+            }
         }
     }
 
     /// Fade out and remove the HUD panel.
     func dismiss() {
+        removeKeyMonitor()
+        onApplyCallback = nil
+        onIgnoreCallback = nil
+        onDismissCallback = nil
+        onAddToDictionaryCallback = nil
+        currentSuggestions = []
         keyboardState = nil
         guard let p = panel else { return }
         logger.debug("dismiss: fading out HUD panel")
@@ -412,10 +513,10 @@ private struct InlineSuggestionView: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 6)
             } else {
+                let capped = Array(issue.suggestions.prefix(4))
                 VStack(alignment: .leading, spacing: 1) {
-                    ForEach(
-                        Array(issue.suggestions.prefix(4).enumerated()), id: \.element
-                    ) { index, suggestion in
+                    ForEach(capped.indices, id: \.self) { index in
+                        let suggestion = capped[index]
                         Button {
                             onApply(suggestion)
                         } label: {
