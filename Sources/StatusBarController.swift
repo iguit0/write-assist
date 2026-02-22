@@ -87,8 +87,11 @@ final class StatusBarController: NSObject, @unchecked Sendable {
         // Dismiss the inline popup immediately when the user types (no 500ms lag)
         inputMonitor.onKeystroke = { [weak self] in
             Task { @MainActor in
-                if self?.hudPanel != nil {
-                    logger.debug("onKeystroke: dismissing HUD on user typing")
+                // When the HUD's keyboard monitor is active, it handles all key
+                // events itself (including dismissal for non-navigation keys).
+                // Don't dismiss here — it would race with the HUD's own handler.
+                guard self?.hudPanel?.isAcceptingKeyboardInput != true else {
+                    return
                 }
                 self?.hudPanel?.dismiss()
             }
