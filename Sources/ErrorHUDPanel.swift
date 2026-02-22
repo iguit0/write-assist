@@ -49,6 +49,15 @@ final class ErrorHUDPanel {
     /// positions the panel just below the caret. Falls back to the top-right
     /// corner of the screen if the AX query fails.
     func show(issue: WritingIssue, viewModel: DocumentViewModel) {
+        // ── Keyboard navigation gate ─────────────────────────────────────────
+        // Don't tear down the panel while the user is navigating suggestions
+        // with arrow keys. GlobalInputMonitor still calls textDidChange on
+        // arrow keys (buffer unchanged), which re-triggers runCheck → show().
+        if isAcceptingKeyboardInput {
+            logger.debug("show: skipping — keyboard navigation active (\(issue.word))")
+            return
+        }
+
         // ── Cooldown gate ────────────────────────────────────────────────────
         // Don't show a new HUD if we just dismissed one (prevents rapid cycling
         // that leads to competing AX calls and deadlocks).
