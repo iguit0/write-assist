@@ -81,44 +81,66 @@ struct PassiveVoiceRule: WritingRule {
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         var issues: [WritingIssue] = []
         let tags = analysis.wordPOSTags
+        var i = 0
 
-        // Look for pattern: "to be" verb followed by past participle (VBN)
-        for i in 0..<tags.count {
-            let (word, _, _) = tags[i]
-            let lower = word.lowercased()
+        while i < tags.count {
+            let lower = tags[i].word.lowercased()
 
-            guard Self.toBeVerbs.contains(lower) else { continue }
-
-            // Check the next word (skip one if adverb is in between)
-            var nextIdx = i + 1
-            if nextIdx < tags.count, tags[nextIdx].tag == .adverb {
-                nextIdx += 1
+            if Self.toBeVerbs.contains(lower) {
+                // Path 1: direct "to be" verb → [adverb] → past participle
+                if let issue = detectPassive(tags: tags, startIdx: i, beIdx: i, text: text) {
+                    issues.append(issue)
+                }
+            } else if Self.auxiliaryVerbs.contains(lower) {
+                // Path 2: auxiliary → [adverb] → be/been/being → [adverb] → past participle
+                var j = i + 1
+                // Skip optional adverb after auxiliary
+                if j < tags.count, tags[j].tag == .adverb { j += 1 }
+                // Expect a "to be" verb next
+                if j < tags.count {
+                    let beCandidate = tags[j].word.lowercased()
+                    if beCandidate == "be" || beCandidate == "been" || beCandidate == "being" {
+                        if let issue = detectPassive(tags: tags, startIdx: i, beIdx: j, text: text) {
+                            issues.append(issue)
+                        }
+                    }
+                }
             }
-            guard nextIdx < tags.count else { continue }
 
-            let (nextWord, nextTag, _) = tags[nextIdx]
-            // NLTagger tags past participles as .verb — check common -ed/-en endings
-            guard nextTag == .verb else { continue }
-            let nextLower = nextWord.lowercased()
-            guard nextLower.hasSuffix("ed") || nextLower.hasSuffix("en")
-                || nextLower.hasSuffix("wn") || nextLower.hasSuffix("ne") else { continue }
-
-            // Build the passive phrase range
-            let startRange = tags[i].range
-            let endRange = tags[nextIdx].range
-            let phraseRange = startRange.lowerBound..<endRange.upperBound
-            let nsRange = NSRange(phraseRange, in: text)
-            let phrase = String(text[phraseRange])
-
-            issues.append(WritingIssue(
-                type: .passiveVoice,
-                range: nsRange,
-                word: phrase,
-                message: "Passive voice — consider using active voice",
-                suggestions: []
-            ))
+            i += 1
         }
 
         return issues
+    }
+
+    /// Look for a past participle after `beIdx`, skipping one optional adverb.
+    /// Returns a WritingIssue spanning from `startIdx` to the participle, or nil.
+    private func detectPassive(
+        tags: [(word: String, tag: NLTag?, range: Range<String.Index>)],
+        startIdx: Int,
+        beIdx: Int,
+        text: String
+    ) -> WritingIssue? {
+        var nextIdx = beIdx + 1
+        // Skip optional adverb between to-be verb and participle
+        if nextIdx < tags.count, tags[nextIdx].tag == .adverb { nextIdx += 1 }
+        guard nextIdx < tags.count else { return nil }
+
+        let (nextWord, nextTag, _) = tags[nextIdx]
+        guard nextTag == .verb else { return nil }
+        guard Self.isPastParticiple(nextWord.lowercased()) else { return nil }
+
+        // Build phrase range from start auxiliary/to-be to the participle
+        let phraseRange = tags[startIdx].range.lowerBound..<tags[nextIdx].range.upperBound
+        let nsRange = NSRange(phraseRange, in: text)
+        let phrase = String(text[phraseRange])
+
+        return WritingIssue(
+            type: .passiveVoice,
+            range: nsRange,
+            word: phrase,
+            message: "Passive voice — consider using active voice",
+            suggestions: []
+        )
     }
 }
