@@ -10,7 +10,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "WriteAssist",
-            path: "Sources"
+            path: "Sources",
+            exclude: ["Resources"]
         )
     ]
 )

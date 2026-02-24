@@ -35,6 +35,11 @@ final class GlobalInputMonitor {
     /// Called when a snippet trigger is detected in the buffer.
     var onSnippetTriggered: ((Snippet) -> Void)?
 
+    /// Called when a word-completing key (space, punctuation, Return) is pressed
+    /// immediately after a word character. Used by ExternalSpellChecker to schedule
+    /// a real-time spell check with an 800 ms debounce.
+    var onWordBoundaryTyped: (() -> Void)?
+
     // MARK: - Polling Timer
 
     private var permissionTimer: Timer?
@@ -178,6 +183,12 @@ final class GlobalInputMonitor {
             }
         }
 
+        // Capture the last buffer character BEFORE processing this key.
+        // Used below to detect word boundaries: a word is complete when the
+        // character just typed is a boundary (space / punctuation / Return) and
+        // the preceding character was part of a word.
+        let lastCharBeforeKey = buffer.last
+
         switch keyCode {
         case 51: // Delete (backspace)
             if !buffer.isEmpty {
@@ -195,6 +206,29 @@ final class GlobalInputMonitor {
             for char in chars where char.isLetter || char.isNumber
                 || char.isPunctuation || char.isSymbol || char.isWhitespace {
                 buffer.append(char)
+            }
+        }
+
+        // Fire word-boundary callback when the user completes a word.
+        // Condition: the character just processed is a boundary AND the character
+        // before it was a word character (letter or digit).
+        if lastCharBeforeKey?.isLetter == true || lastCharBeforeKey?.isNumber == true {
+            let isBoundaryKey: Bool
+            switch keyCode {
+            case 36, 76: // Return / Enter
+                isBoundaryKey = true
+            case 48: // Tab
+                isBoundaryKey = true
+            default:
+                // Space, period, comma, ?, !, ;, : all end words.
+                isBoundaryKey = event.characters?.first.map { c in
+                    c == " " || c == "." || c == "," || c == "?"
+                        || c == "!" || c == ";" || c == ":"
+                } ?? false
+            }
+            if isBoundaryKey {
+                logger.debug("handle: word boundary after '\(lastCharBeforeKey!)'")
+                onWordBoundaryTyped?()
             }
         }
 

@@ -7,10 +7,11 @@ import SwiftUI
 /// A SwiftUI-compatible text view that renders captured text with inline
 /// error highlighting: dotted red underlines for spelling errors and dotted
 /// orange underlines for grammar errors, matching the style used by macOS's
-/// built-in spell checker.
+/// built-in spell checker. Supports text selection with optional callback.
 struct HighlightedTextView: NSViewRepresentable {
     let text: String
     let issues: [WritingIssue]
+    var onSelectionChanged: ((String, NSRange) -> Void)?
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -18,7 +19,7 @@ struct HighlightedTextView: NSViewRepresentable {
             return scrollView
         }
         textView.isEditable = false
-        textView.isSelectable = false
+        textView.isSelectable = true
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 8, height: 6)
         textView.font = NSFont.systemFont(ofSize: 12)
@@ -27,12 +28,37 @@ struct HighlightedTextView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        
+        // Set delegate to track selection
+        textView.delegate = context.coordinator
+        
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.textStorage?.setAttributedString(buildAttributedString())
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelectionChanged: onSelectionChanged)
+    }
+    
+    class Coordinator: NSObject, NSTextViewDelegate {
+        let onSelectionChanged: ((String, NSRange) -> Void)?
+        
+        init(onSelectionChanged: ((String, NSRange) -> Void)? = nil) {
+            self.onSelectionChanged = onSelectionChanged
+        }
+        
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let selectedRange = textView.selectedRange
+            guard selectedRange.length > 0 else { return }
+            
+            let selectedText = (textView.string as NSString).substring(with: selectedRange)
+            onSelectionChanged?(selectedText, selectedRange)
+        }
     }
 
     private func buildAttributedString() -> NSAttributedString {

@@ -1,0 +1,284 @@
+{
+  "pairs": [
+    {
+      "words": ["affect", "effect"],
+      "hint": "'Affect' is usually a verb (to influence); 'effect' is usually a noun (a result)."
+    },
+    {
+      "words": ["then", "than"],
+      "hint": "'Then' refers to time; 'than' is used for comparisons."
+    },
+    {
+      "words": ["loose", "lose"],
+      "hint": "'Loose' means not tight; 'lose' means to misplace or fail to win."
+    },
+    {
+      "words": ["their", "there", "they're"],
+      "hint": "'Their' is possessive; 'there' is a place; 'they're' means 'they are'."
+    },
+    {
+      "words": ["its", "it's"],
+      "hint": "'Its' is possessive; 'it's' means 'it is' or 'it has'."
+    },
+    {
+      "words": ["your", "you're"],
+      "hint": "'Your' is possessive; 'you're' means 'you are'."
+    },
+    {
+      "words": ["accept", "except"],
+      "hint": "'Accept' means to receive; 'except' means to exclude."
+    },
+    {
+      "words": ["compliment", "complement"],
+      "hint": "'Compliment' is praise; 'complement' means to complete."
+    },
+    {
+      "words": ["principal", "principle"],
+      "hint": "'Principal' means main or a school leader; 'principle' is a rule or belief."
+    },
+    {
+      "words": ["stationary", "stationery"],
+      "hint": "'Stationary' means not moving; 'stationery' is writing paper."
+    },
+    {
+      "words": ["advice", "advise"],
+      "hint": "'Advice' is a noun; 'advise' is a verb."
+    },
+    {
+      "words": ["breath", "breathe"],
+      "hint": "'Breath' is a noun; 'breathe' is a verb."
+    },
+    {
+      "words": ["who's", "whose"],
+      "hint": "'Who's' means 'who is'; 'whose' is possessive."
+    },
+    {
+      "words": ["to", "too", "two"],
+      "hint": "'To' is a preposition; 'too' means also or excessively; 'two' is the number."
+    },
+    {
+      "words": ["peace", "piece"],
+      "hint": "'Peace' is tranquility; 'piece' is a part of something."
+    },
+    {
+      "words": ["weather", "whether"],
+      "hint": "'Weather' is climate; 'whether' introduces alternatives."
+    },
+    {
+      "words": ["desert", "dessert"],
+      "hint": "'Desert' is a dry area; 'dessert' is a sweet course."
+    },
+    {
+      "words": ["ensure", "insure", "assure"],
+      "hint": "'Ensure' means to make certain; 'insure' is about insurance; 'assure' means to promise."
+    },
+    {
+      "words": ["farther", "further"],
+      "hint": "'Farther' is physical distance; 'further' is figurative extent."
+    },
+    {
+      "words": ["fewer", "less"],
+      "hint": "'Fewer' is for countable items; 'less' is for uncountable quantities."
+    },
+    {
+      "words": ["allude", "elude"],
+      "hint": "'Allude' means to reference indirectly; 'elude' means to escape."
+    },
+    {
+      "words": ["cite", "site", "sight"],
+      "hint": "'Cite' means to reference; 'site' is a location; 'sight' is vision."
+    },
+    {
+      "words": ["discreet", "discrete"],
+      "hint": "'Discreet' means prudent; 'discrete' means separate."
+    },
+    {
+      "words": ["elicit", "illicit"],
+      "hint": "'Elicit' means to draw out; 'illicit' means illegal."
+    },
+    {
+      "words": ["emigrate", "immigrate"],
+      "hint": "'Emigrate' is to leave a country; 'immigrate' is to enter a country."
+    },
+    {
+      "words": ["eminent", "imminent"],
+      "hint": "'Eminent' means distinguished; 'imminent' means about to happen."
+    },
+    {
+      "words": ["flaunt", "flout"],
+      "hint": "'Flaunt' means to show off; 'flout' means to disregard."
+    },
+    {
+      "words": ["imply", "infer"],
+      "hint": "'Imply' means to suggest; 'infer' means to deduce."
+    },
+    {
+      "words": ["lay", "lie"],
+      "hint": "'Lay' requires an object; 'lie' does not."
+    },
+    {
+      "words": ["peak", "peek", "pique"],
+      "hint": "'Peak' is a summit; 'peek' is a glance; 'pique' means to stimulate."
+    },
+    {
+      "words": ["precede", "proceed"],
+      "hint": "'Precede' means to come before; 'proceed' means to continue."
+    },
+    {
+      "words": ["bare", "bear"],
+      "hint": "'Bare' means uncovered; 'bear' means to carry or the animal."
+    },
+    {
+      "words": ["capital", "capitol"],
+      "hint": "'Capital' is a city or wealth; 'capitol' is a government building."
+    },
+    {
+      "words": ["council", "counsel"],
+      "hint": "'Council' is an assembly; 'counsel' is advice or a lawyer."
+    },
+    {
+      "words": ["coarse", "course"],
+      "hint": "'Coarse' means rough; 'course' is a path or class."
+    },
+    {
+      "words": ["dual", "duel"],
+      "hint": "'Dual' means double; 'duel' is a fight."
+    },
+    {
+      "words": ["envelop", "envelope"],
+      "hint": "'Envelop' means to surround; 'envelope' is for mail."
+    },
+    {
+      "words": ["hoard", "horde"],
+      "hint": "'Hoard' is a stockpile; 'horde' is a large group."
+    },
+    {
+      "words": ["lead", "led"],
+      "hint": "'Lead' (present) vs 'led' (past tense of lead)."
+    },
+    {
+      "words": ["lightening", "lightning"],
+      "hint": "'Lightening' means becoming lighter; 'lightning' is the weather phenomenon."
+    },
+    {
+      "words": ["moral", "morale"],
+      "hint": "'Moral' relates to right/wrong; 'morale' is spirit or confidence."
+    },
+    {
+      "words": ["waist", "waste"],
+      "hint": "'Waist' is a body part; 'waste' means to squander."
+    },
+    {
+      "words": ["alright", "all right"],
+      "hint": "'All right' is the standard spelling; 'alright' is informal."
+    },
+    {
+      "words": ["beside", "besides"],
+      "hint": "'Beside' means next to; 'besides' means in addition to."
+    },
+    {
+      "words": ["historic", "historical"],
+      "hint": "'Historic' means significant in history; 'historical' means related to history."
+    },
+    {
+      "words": ["averse", "adverse"],
+      "hint": "'Averse' means opposed to; 'adverse' means harmful."
+    },
+    {
+      "words": ["appraise", "apprise"],
+      "hint": "'Appraise' means to evaluate; 'apprise' means to inform."
+    },
+    {
+      "words": ["chord", "cord"],
+      "hint": "'Chord' is a music term; 'cord' is a string or rope."
+    },
+    {
+      "words": ["conscience", "conscious"],
+      "hint": "'Conscience' is a moral sense; 'conscious' means aware."
+    },
+    {
+      "words": ["diffuse", "defuse"],
+      "hint": "'Diffuse' means to spread; 'defuse' means to remove danger."
+    },
+    {
+      "words": ["phase", "faze"],
+      "hint": "'Phase' is a stage; 'faze' means to disturb."
+    },
+    {
+      "words": ["ware", "wear", "where"],
+      "hint": "'Ware' is merchandise; 'wear' is for clothing; 'where' is a location."
+    },
+    {
+      "words": ["wring", "ring"],
+      "hint": "'Wring' means to twist; 'ring' is a circle or bell sound."
+    },
+    {
+      "words": ["allusion", "illusion"],
+      "hint": "'Allusion' is an indirect reference; 'illusion' is a false perception."
+    },
+    {
+      "words": ["born", "borne"],
+      "hint": "'Born' means given birth to; 'borne' means carried."
+    },
+    {
+      "words": ["canvas", "canvass"],
+      "hint": "'Canvas' is fabric; 'canvass' means to solicit."
+    },
+    {
+      "words": ["censor", "censure"],
+      "hint": "'Censor' means to suppress; 'censure' means to criticize."
+    },
+    {
+      "words": ["compose", "comprise"],
+      "hint": "'Compose' means to make up; 'comprise' means to consist of."
+    },
+    {
+      "words": ["continual", "continuous"],
+      "hint": "'Continual' means recurring; 'continuous' means uninterrupted."
+    },
+    {
+      "words": ["credible", "credulous"],
+      "hint": "'Credible' means believable; 'credulous' means gullible."
+    },
+    {
+      "words": ["definite", "definitive"],
+      "hint": "'Definite' means certain; 'definitive' means conclusive."
+    },
+    {
+      "words": ["deprecate", "depreciate"],
+      "hint": "'Deprecate' means to express disapproval; 'depreciate' means to decrease in value."
+    },
+    {
+      "words": ["flounder", "founder"],
+      "hint": "'Flounder' means to struggle; 'founder' means to sink or fail."
+    },
+    {
+      "words": ["hardy", "hearty"],
+      "hint": "'Hardy' means robust; 'hearty' means warm and enthusiastic."
+    },
+    {
+      "words": ["loath", "loathe"],
+      "hint": "'Loath' means reluctant; 'loathe' means to hate."
+    },
+    {
+      "words": ["material", "materiel"],
+      "hint": "'Material' is substance; 'materiel' is military equipment."
+    },
+    {
+      "words": ["militate", "mitigate"],
+      "hint": "'Militate' means to work against; 'mitigate' means to lessen."
+    },
+    {
+      "words": ["personal", "personnel"],
+      "hint": "'Personal' means private; 'personnel' means staff."
+    },
+    {
+      "words": ["prescribe", "proscribe"],
+      "hint": "'Prescribe' means to recommend; 'proscribe' means to forbid."
+    },
+    {
+      "words": ["tortuous", "torturous"],
+      "hint": "'Tortuous' means winding; 'torturous' means painful."
+    }
+  ]
+}

@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationWillTerminate(_ notification: Notification) {
+        WritingStatsStore.shared.endSession()
         inputMonitor?.cleanup()
         inputMonitor?.stopMonitoring()
         statusBarController?.teardown()

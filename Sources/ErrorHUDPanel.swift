@@ -93,7 +93,10 @@ final class ErrorHUDPanel {
         } : nil
 
         let suggestionCount = min(issue.suggestions.count, 4)
-        let kbState = HUDKeyboardState(suggestionCount: suggestionCount)
+        // AI Rewrite is only meaningful for multi-word text (sentences/phrases).
+        // Suppress it for single misspelled words — rewriting a bare word produces nonsensical output.
+        let isMultiWord = issue.word.split(whereSeparator: \.isWhitespace).count > 1
+        let kbState = HUDKeyboardState(suggestionCount: suggestionCount, aiAvailable: CloudAIService.shared.isConfigured && isMultiWord)
         self.keyboardState = kbState
 
         // Store for keyboard navigation
@@ -202,11 +205,20 @@ final class ErrorHUDPanel {
             logger.debug("handleKeyEvent: ↑ — selectedIndex=\(self.keyboardState?.selectedIndex ?? -1)")
 
         case 36, 76: // Return / Enter
-            if let index = keyboardState?.selectedIndex,
-               index < currentSuggestions.count {
-                let suggestion = currentSuggestions[index]
-                logger.debug("handleKeyEvent: ↵ — applying '\(suggestion)'")
-                onApplyCallback?(suggestion)
+            if let kbs = keyboardState {
+                if kbs.isAIRewriteSelected {
+                    if let result = kbs.rewriteResult {
+                        logger.debug("handleKeyEvent: ↵ — applying AI rewrite")
+                        onApplyCallback?(result)
+                    } else {
+                        logger.debug("handleKeyEvent: ↵ — triggering AI rewrite")
+                        kbs.triggerRewrite?()
+                    }
+                } else if let index = kbs.selectedIndex, index < currentSuggestions.count {
+                    let suggestion = currentSuggestions[index]
+                    logger.debug("handleKeyEvent: ↵ — applying '\(suggestion)'")
+                    onApplyCallback?(suggestion)
+                }
             }
 
         case 53: // Escape
@@ -217,6 +229,19 @@ final class ErrorHUDPanel {
             // Check for character shortcuts
             if let chars = event.charactersIgnoringModifiers?.lowercased() {
                 switch chars {
+                case "r":
+                    // 'r' is a direct shortcut to trigger or apply the AI rewrite.
+                    if let kbs = keyboardState, kbs.aiAvailable {
+                        if let result = kbs.rewriteResult {
+                            logger.debug("handleKeyEvent: 'r' — applying AI rewrite")
+                            onApplyCallback?(result)
+                        } else {
+                            logger.debug("handleKeyEvent: 'r' — triggering AI rewrite")
+                            kbs.triggerRewrite?()
+                        }
+                    } else {
+                        dismiss()
+                    }
                 case "i":
                     logger.debug("handleKeyEvent: 'i' — ignoring issue")
                     onIgnoreCallback?()
@@ -429,25 +454,50 @@ final class HUDKeyboardState {
     var selectedIndex: Int?
     let suggestionCount: Int
 
-    init(suggestionCount: Int) {
+    /// Whether the AI Rewrite slot is available (AI is configured).
+    let aiAvailable: Bool
+
+    /// Set by InlineSuggestionView on appear so the key handler can trigger
+    /// a rewrite without holding a direct reference to the view.
+    var triggerRewrite: (() -> Void)?
+
+    /// Updated by InlineSuggestionView when the AI response arrives.
+    /// Shared here so ErrorHUDPanel.handleKeyEvent can apply it on Enter.
+    var rewriteResult: String?
+
+    /// Set when `performAIRewrite()` fails. Auto-clears after 3 s so the
+    /// button returns to its idle state without requiring user action.
+    var rewriteError: String?
+
+    /// Total navigable slots: suggestions + optional AI Rewrite row.
+    var totalSlotCount: Int { suggestionCount + (aiAvailable ? 1 : 0) }
+
+    /// True when the cursor has moved into the AI Rewrite slot.
+    var isAIRewriteSelected: Bool {
+        guard aiAvailable, let idx = selectedIndex else { return false }
+        return idx == suggestionCount
+    }
+
+    init(suggestionCount: Int, aiAvailable: Bool) {
         self.suggestionCount = suggestionCount
+        self.aiAvailable = aiAvailable
     }
 
     func moveDown() {
-        guard suggestionCount > 0 else { return }
+        guard totalSlotCount > 0 else { return }
         if let current = selectedIndex {
-            selectedIndex = (current + 1) % suggestionCount
+            selectedIndex = (current + 1) % totalSlotCount
         } else {
             selectedIndex = 0
         }
     }
 
     func moveUp() {
-        guard suggestionCount > 0 else { return }
+        guard totalSlotCount > 0 else { return }
         if let current = selectedIndex {
-            selectedIndex = (current - 1 + suggestionCount) % suggestionCount
+            selectedIndex = (current - 1 + totalSlotCount) % totalSlotCount
         } else {
-            selectedIndex = suggestionCount - 1
+            selectedIndex = totalSlotCount - 1
         }
     }
 }
@@ -466,224 +516,26 @@ private struct InlineSuggestionView: View {
 
     @State private var hoveredSuggestion: String?
     @State private var isRewriting = false
-    @State private var rewriteResult: String?
+    // `rewriteResult` lives in keyboardState so ErrorHUDPanel.handleKeyEvent can apply it.
 
     private var accentColor: Color {
         issue.type.color
     }
 
+    /// Pre-capped suggestion list — avoids repeated Array allocation inside body.
+    private var cappedSuggestions: [String] {
+        Array(issue.suggestions.prefix(4))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header bar
-            HStack(spacing: 6) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(accentColor)
-                    .frame(width: 3, height: 14)
-                Image(systemName: issue.type.icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(accentColor)
-                Text(issue.type.categoryLabel)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(accentColor)
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(issue.message)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                // Dismiss "×" button
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                        .padding(4)
-                        .background(Circle().fill(Color.primary.opacity(0.07)))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-
+            headerView
             Divider().padding(.horizontal, 8)
-
-            // Word display
-            Text("\"\(issue.word)\"")
-                .font(.system(size: 14, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
-            // Suggestions list or placeholder
-            if issue.suggestions.isEmpty {
-                Text("No suggestions available")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 6)
-            } else {
-                let capped = Array(issue.suggestions.prefix(4))
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(capped.indices, id: \.self) { index in
-                        let suggestion = capped[index]
-                        Button {
-                            onApply(suggestion)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(accentColor)
-                                    .frame(width: 12)
-                                Text(suggestion)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                            }
-                            .padding(.vertical, 5)
-                            .padding(.horizontal, 12)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(
-                                    suggestionOpacity(for: suggestion, at: index)
-                                ))
-                        )
-                        .onHover { isHovered in
-                            hoveredSuggestion = isHovered ? suggestion : nil
-                        }
-                    }
-                }
-                .padding(.top, 4)
-            }
-
-            // AI Rewrite (if configured)
-            if CloudAIService.shared.isConfigured {
-                Divider().padding(.horizontal, 8).padding(.top, 4)
-
-                if let rewrite = rewriteResult {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.indigo)
-                        Text("AI:")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.indigo)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
-
-                    Button {
-                        onApply(rewrite)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.indigo)
-                                .frame(width: 12)
-                            Text(rewrite)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.primary)
-                                .lineLimit(3)
-                            Spacer()
-                        }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 12)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                } else if isRewriting {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text("Rewriting...")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                } else {
-                    Button {
-                        isRewriting = true
-                        Task {
-                            do {
-                                let result = try await CloudAIService.shared.rewrite(
-                                    text: issue.word, style: .clearer
-                                )
-                                rewriteResult = result
-                            } catch {
-                                // Silently fail — AI is optional
-                            }
-                            isRewriting = false
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 9))
-                            Text("AI Rewrite")
-                                .font(.system(size: 10))
-                        }
-                        .foregroundStyle(.indigo)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
+            wordDisplayView
+            suggestionsListView
+            aiRewriteView
             Divider().padding(.horizontal, 8).padding(.top, 4)
-
-            // Action buttons
-            HStack(spacing: 12) {
-                // Add to dictionary (spelling only)
-                if let onAddToDictionary, issue.type == .spelling {
-                    Button(action: onAddToDictionary) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus.circle")
-                                .font(.system(size: 10))
-                            Text("Add to Dictionary")
-                                .font(.system(size: 11))
-                        }
-                        .foregroundStyle(.blue)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Spacer()
-
-                // Ignore button
-                Button(action: onIgnore) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "xmark.circle")
-                            .font(.system(size: 10))
-                        Text("Ignore")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(.secondary)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-
-            // Keyboard shortcut hints
-            HStack(spacing: 0) {
-                Text("↑↓ navigate · ↵ apply · i ignore · esc dismiss")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.quaternary)
-                if issue.type == .spelling, onAddToDictionary != nil {
-                    Text(" · d add to dict")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.quaternary)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
-            .padding(.top, 2)
+            actionButtonsView
         }
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
@@ -697,7 +549,224 @@ private struct InlineSuggestionView: View {
         )
         .shadow(color: .black.opacity(0.22), radius: 14, y: 5)
         .padding(2) // prevent shadow clipping
+        .onAppear {
+            // Register the AI rewrite trigger so ErrorHUDPanel.handleKeyEvent
+            // can fire it via keyboard without a direct reference to this view.
+            keyboardState.triggerRewrite = { performAIRewrite() }
+        }
     }
+
+    // MARK: - Subviews
+
+    private var headerView: some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(accentColor)
+                .frame(width: 3, height: 14)
+            Image(systemName: issue.type.icon)
+                .font(.system(size: 10))
+                .foregroundStyle(accentColor)
+            Text(issue.type.categoryLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(accentColor)
+            Text("·")
+                .foregroundStyle(.tertiary)
+            Text(issue.message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .padding(4)
+                    .background(Circle().fill(Color.primary.opacity(0.07)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+    }
+
+    private var wordDisplayView: some View {
+        Text("\"\(issue.word)\"")
+            .font(.system(size: 14, weight: .semibold))
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var suggestionsListView: some View {
+        if issue.suggestions.isEmpty {
+            Text("No suggestions available")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(Array(cappedSuggestions.enumerated()), id: \.offset) { index, suggestion in
+                    Button {
+                        onApply(suggestion)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(accentColor)
+                                .frame(width: 12)
+                            Text(suggestion)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.primary.opacity(
+                                suggestionOpacity(for: suggestion, at: index)
+                            ))
+                    )
+                    .animation(.easeInOut(duration: 0.15), value: hoveredSuggestion)
+                    .animation(.easeInOut(duration: 0.1), value: keyboardState.selectedIndex)
+                    .onHover { isHovered in
+                        hoveredSuggestion = isHovered ? suggestion : nil
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var aiRewriteView: some View {
+        if keyboardState.aiAvailable {
+            Divider().padding(.horizontal, 8).padding(.top, 4)
+
+            if let rewrite = keyboardState.rewriteResult {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.indigo)
+                    Text("AI:")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.indigo)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+
+                Button {
+                    onApply(rewrite)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.indigo)
+                            .frame(width: 12)
+                        Text(rewrite)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.primary)
+                            .lineLimit(3)
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.primary.opacity(keyboardState.isAIRewriteSelected ? 0.12 : 0.0))
+                )
+                .animation(.easeInOut(duration: 0.1), value: keyboardState.isAIRewriteSelected)
+            } else if isRewriting {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Rewriting...")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            } else if let errorMsg = keyboardState.rewriteError {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.circle")
+                        .font(.system(size: 9))
+                    Text(errorMsg)
+                        .font(.system(size: 10))
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .animation(.easeInOut(duration: 0.2), value: errorMsg)
+            } else {
+                Button {
+                    performAIRewrite()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 9))
+                        Text("AI Rewrite")
+                            .font(.system(size: 10))
+                        Spacer()
+                    }
+                    .foregroundStyle(.indigo)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.primary.opacity(keyboardState.isAIRewriteSelected ? 0.12 : 0.0))
+                )
+                .animation(.easeInOut(duration: 0.1), value: keyboardState.isAIRewriteSelected)
+            }
+        }
+    }
+
+    private var actionButtonsView: some View {
+        HStack(spacing: 12) {
+            if let onAddToDictionary, issue.type == .spelling {
+                Button(action: onAddToDictionary) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 10))
+                        Text("Add to Dictionary")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundStyle(.blue)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            Button(action: onIgnore) {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 10))
+                    Text("Ignore")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    // MARK: - Helpers
 
     private func suggestionOpacity(for suggestion: String, at index: Int) -> Double {
         if keyboardState.selectedIndex == index {
@@ -706,5 +775,28 @@ private struct InlineSuggestionView: View {
             return 0.07
         }
         return 0.0
+    }
+
+    private func performAIRewrite() {
+        isRewriting = true
+        keyboardState.rewriteError = nil
+        Task {
+            do {
+                let result = try await CloudAIService.shared.rewrite(
+                    text: issue.word, style: .clearer
+                )
+                keyboardState.rewriteResult = result
+            } catch is CancellationError {
+                // Task was cancelled (HUD dismissed mid-flight) — no user action needed.
+            } catch {
+                // Surface a brief error so the user knows why the rewrite didn't appear.
+                keyboardState.rewriteError = "AI unavailable — try again"
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(3))
+                    keyboardState.rewriteError = nil
+                }
+            }
+            isRewriting = false
+        }
     }
 }

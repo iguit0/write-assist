@@ -20,8 +20,12 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     private var popover: NSPopover?
     private var eventMonitor: Any?
     private var hudPanel: ErrorHUDPanel?
+    private var selectionPanel: SelectionSuggestionPanel?
+    private var selectionMonitor: SelectionMonitor?
+    private var externalSpellChecker: ExternalSpellChecker?
     private var isAnimating = false
     private var hotkeyEventTap: CFMachPort?
+    private var hotkeyMonitor: Any?
 
     // MARK: - Setup
 
@@ -31,6 +35,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     func setup(viewModel: DocumentViewModel, inputMonitor: GlobalInputMonitor) {
         self.viewModel = viewModel
         hudPanel = ErrorHUDPanel()
+        selectionPanel = SelectionSuggestionPanel(viewModel: viewModel)
 
         // Create the status bar item — use variableLength so the button
         // is always visible even if the image fails to load.
@@ -64,6 +69,46 @@ final class StatusBarController: NSObject, @unchecked Sendable {
         // Watch for issue count changes and update the badge
         startBadgeObserver(viewModel: viewModel)
 
+        // Real-time external spell checking — fires 800 ms after the user completes
+        // a word in any external app (space/punctuation/Return after a word character).
+        let spellChecker = ExternalSpellChecker()
+        externalSpellChecker = spellChecker
+        spellChecker.onIssueDetected = { [weak self, weak viewModel] issue, caretBounds in
+            guard let self, let viewModel else { return }
+            // Don't show if the sidebar popover is visible
+            guard self.popover?.isShown != true else { return }
+            // Don't show while an AX correction is being applied
+            guard !viewModel.isCorrectionInFlight else { return }
+            // Don't show while the HUD keyboard nav is active
+            guard self.hudPanel?.isAcceptingKeyboardInput != true else { return }
+            // Don't stack on top of the selection suggestion panel
+            guard self.selectionPanel?.isVisible != true else { return }
+            self.hudPanel?.show(issue: issue, viewModel: viewModel)
+        }
+
+        inputMonitor.onWordBoundaryTyped = { [weak spellChecker, weak viewModel] in
+            // Skip if correction is in flight — reading AX now would race with the write.
+            guard viewModel?.isCorrectionInFlight != true else { return }
+            spellChecker?.scheduleCheck()
+        }
+
+        // Show the selection panel when the user selects ≥ 3 words in any app.
+        // Guards: don't show while the sidebar is open, the HUD is in keyboard-nav
+        // mode, or a correction is being applied.
+        let monitor = SelectionMonitor()
+        selectionMonitor = monitor
+        monitor.onSelectionChanged = { [weak self, weak viewModel] text, range, bounds in
+            guard let self else { return }
+            guard self.popover?.isShown != true else { return }
+            guard self.hudPanel?.isAcceptingKeyboardInput != true else { return }
+            guard viewModel?.isCorrectionInFlight != true else { return }
+            self.selectionPanel?.show(selectedText: text, range: range, near: bounds)
+        }
+        monitor.onSelectionCleared = { [weak self] in
+            self?.selectionPanel?.dismiss()
+        }
+        monitor.start()
+
         // Direct callback: fires from runCheck() as soon as spell-check completes —
         // no polling lag. Shows the HUD for the first issue in the list.
         viewModel.onNewIssuesReadyForHUD = { [weak self] issues in
@@ -71,6 +116,12 @@ final class StatusBarController: NSObject, @unchecked Sendable {
             // Don't show HUD if the sidebar popover is already visible
             guard self.popover?.isShown != true else {
                 logger.debug("onNewIssuesReadyForHUD: popover visible — skipping HUD")
+                return
+            }
+            // Don't show HUD while the selection suggestion panel is on screen —
+            // both panels use floating NSPanel and would stack confusingly.
+            guard self.selectionPanel?.isVisible != true else {
+                logger.debug("onNewIssuesReadyForHUD: selection panel visible — skipping HUD")
                 return
             }
             // Don't show HUD while a correction is being applied
@@ -84,9 +135,15 @@ final class StatusBarController: NSObject, @unchecked Sendable {
             }
         }
 
-        // Dismiss the inline popup immediately when the user types (no 500ms lag)
+        // Dismiss the inline popup immediately when the user types (no 500ms lag).
+        // Also dismiss the selection suggestion panel on any keystroke, and cancel
+        // any pending external spell-check debounce so the clock resets correctly.
         inputMonitor.onKeystroke = { [weak self] in
             Task { @MainActor in
+                // Cancel the spell-check debounce on every keystroke — it will be
+                // rescheduled by onWordBoundaryTyped if this was a boundary key.
+                self?.externalSpellChecker?.cancel()
+
                 // When the HUD's keyboard monitor is active, it handles all key
                 // events itself (including dismissal for non-navigation keys).
                 // Don't dismiss here — it would race with the HUD's own handler.
@@ -94,6 +151,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
                     return
                 }
                 self?.hudPanel?.dismiss()
+                self?.selectionPanel?.dismiss()
             }
         }
 
@@ -126,6 +184,12 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     func teardown() {
         badgeObserver?.cancel()
         badgeObserver = nil
+        externalSpellChecker?.cancel()
+        externalSpellChecker = nil
+        selectionMonitor?.stop()
+        selectionMonitor = nil
+        selectionPanel?.dismiss()
+        selectionPanel = nil
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
         }
@@ -315,7 +379,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     private func registerGlobalHotkey() {
         // Use NSEvent global monitor for key combinations
         // Cmd+Shift+G to toggle the popover
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
             // Cmd+Shift+G: keyCode 5 = G
             if flags == [.command, .shift] && event.keyCode == 5 {
@@ -328,8 +392,10 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     }
 
     private func unregisterGlobalHotkey() {
-        // NSEvent global monitors are automatically cleaned up when the app terminates.
-        // For explicit cleanup, we'd need to store the monitor reference separately.
+        if let monitor = hotkeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        hotkeyMonitor = nil
         logger.debug("Global hotkey unregistered")
     }
 }

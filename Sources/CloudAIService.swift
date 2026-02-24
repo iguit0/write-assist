@@ -120,10 +120,13 @@ final class CloudAIService: @unchecked Sendable {
     // MARK: - Completion
 
     func complete(prompt: String, systemPrompt: String) async throws -> String {
-        // Rate limiting
-        if let lastTime = lastRequestTime,
-           ContinuousClock.now - lastTime < minRequestInterval {
-            try await Task.sleep(for: minRequestInterval)
+        // Rate limiting — sleep only the *remaining* time to reach the minimum interval,
+        // not the full interval, to avoid unnecessarily exceeding caller-imposed timeouts.
+        if let lastTime = lastRequestTime {
+            let elapsed = ContinuousClock.now - lastTime
+            if elapsed < minRequestInterval {
+                try await Task.sleep(for: minRequestInterval - elapsed)
+            }
         }
 
         isProcessing = true
@@ -166,6 +169,103 @@ final class CloudAIService: @unchecked Sendable {
         return result.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    // MARK: - AI Spell Check
+
+    /// Calls the AI to detect spelling errors. Returns `[WritingIssue]` with type `.spelling`.
+    /// Throws on network or parse errors — caller is responsible for fallback.
+    func spellCheck(text: String) async throws -> [WritingIssue] {
+        let (system, user) = AIPromptTemplates.spellCheckPrompt(text: text)
+        let raw = try await complete(prompt: user, systemPrompt: system)
+        logger.debug("spellCheck: raw model response (\(raw.count) chars): \(raw.prefix(500))")
+        let issues = Self.parseSpellCheckResponse(raw, text: text)
+        logger.debug("spellCheck: parsed \(issues.count) issue(s)")
+        return issues
+    }
+
+    /// Parses an AI JSON spell-check response into `[WritingIssue]`.
+    /// Strips markdown code fences, validates reported offsets against the source text,
+    /// and falls back to a case-insensitive string search when offsets are wrong.
+    /// `nonisolated static` — pure data transformation, no actor state required.
+    nonisolated static func parseSpellCheckResponse(
+        _ response: String,
+        text: String
+    ) -> [WritingIssue] {
+        let nsText = text as NSString
+        let textLength = nsText.length
+
+        // Strip markdown code fences (```json ... ``` or ``` ... ```)
+        var cleaned = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") {
+            if let firstNewline = cleaned.firstIndex(of: "\n") {
+                cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
+            }
+            if cleaned.hasSuffix("```") {
+                cleaned = String(cleaned.dropLast(3))
+            }
+            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Repair truncated JSON arrays: models sometimes omit the closing `]`.
+        // Find the last `}` and close the array if it's missing.
+        if cleaned.hasPrefix("[") && !cleaned.hasSuffix("]") {
+            if let lastBrace = cleaned.lastIndex(of: "}") {
+                cleaned = String(cleaned[cleaned.startIndex...lastBrace]) + "]"
+                logger.debug("spellCheck: repaired truncated JSON array (appended ']')")
+            }
+        }
+
+        guard let data = cleaned.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            logger.warning("spellCheck: response is not a valid JSON array — raw (first 300 chars): \(cleaned.prefix(300))")
+            return []
+        }
+
+        var issues: [WritingIssue] = []
+
+        for entry in json {
+            guard let word = entry["word"] as? String,
+                  !word.isEmpty else {
+                continue
+            }
+            // `corrections` is optional — some models omit it; treat absence as no suggestions.
+            // Filter out degenerate suggestions where the model echoes the word back as a correction.
+            let rawCorrections = (entry["corrections"] as? [String]) ?? []
+            let corrections = rawCorrections.filter { $0.lowercased() != word.lowercased() }
+            // If every suggestion was filtered out AND the model provided suggestions, it's a false
+            // positive (model flagged a correct word and suggested it as its own fix). Skip it.
+            guard corrections.isEmpty == false || rawCorrections.isEmpty else { continue }
+
+            let resolvedRange: NSRange
+            let wordUTF16Len = (word as NSString).length
+            if let offset = entry["offset"] as? Int,
+               offset >= 0,
+               offset + wordUTF16Len <= textLength,
+               nsText.substring(with: NSRange(location: offset, length: wordUTF16Len)) == word {
+                // AI-reported offset is accurate
+                resolvedRange = NSRange(location: offset, length: wordUTF16Len)
+            } else {
+                // Fallback: locate the word via case-insensitive search
+                let searchRange = nsText.range(
+                    of: word,
+                    options: .caseInsensitive,
+                    range: NSRange(location: 0, length: textLength)
+                )
+                guard searchRange.location != NSNotFound else { continue }
+                resolvedRange = searchRange
+            }
+
+            issues.append(WritingIssue(
+                type: .spelling,
+                range: resolvedRange,
+                word: word,
+                message: "Misspelled word",
+                suggestions: corrections
+            ))
+        }
+
+        return issues
     }
 
     // MARK: - Chat

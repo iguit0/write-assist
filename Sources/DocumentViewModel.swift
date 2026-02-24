@@ -55,10 +55,21 @@ final class DocumentViewModel: @unchecked Sendable {
     /// Weak reference to the input monitor so we can update the buffer after correction.
     weak var inputMonitor: GlobalInputMonitor?
 
+    /// Cached NL analysis result, updated on each check cycle.
+    private(set) var cachedAnalysis: NLAnalysis?
+
+    /// Active category filter for the issue list. Nil means show all.
+    var selectedCategory: IssueCategory?
+
+    /// Detected tone from the latest NL analysis.
+    var detectedTone: DetectedTone { cachedAnalysis?.detectedTone ?? .neutral }
+
     /// Call this when the popover opens to mark all current issues as seen.
     func markAllSeen() {
         unseenIssueIDs.removeAll()
     }
+
+    // MARK: - Basic Stats
 
     var wordCount: Int {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,16 +83,73 @@ final class DocumentViewModel: @unchecked Sendable {
         text.count
     }
 
-    /// Writing score: 100 minus penalties per active issue (spelling −5, grammar −3), min 0.
-    var writingScore: Int {
-        guard !text.isEmpty else { return 100 }
-        let active = issues.filter { !$0.isIgnored }
-        let penalty = active.reduce(0) { $0 + ($1.type == .spelling ? 5 : 3) }
-        return max(0, 100 - penalty)
+    // MARK: - Metrics
+
+    var sentenceCount: Int {
+        cachedAnalysis?.sentenceCount ?? max(1, text.components(separatedBy: .init(charactersIn: ".!?")).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count)
     }
+
+    var averageSentenceLength: Double {
+        cachedAnalysis?.averageSentenceLength ?? (wordCount > 0 ? Double(wordCount) / Double(sentenceCount) : 0)
+    }
+
+    var paragraphCount: Int {
+        guard !text.isEmpty else { return 0 }
+        return text.components(separatedBy: "\n\n")
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .count
+    }
+
+    var vocabularyDiversity: Double {
+        cachedAnalysis?.vocabularyDiversity ?? 0
+    }
+
+    var averageWordLength: Double {
+        cachedAnalysis?.averageWordLength ?? 0
+    }
+
+    /// Flesch-Kincaid readability score.
+    /// 206.835 - 1.015*(words/sentences) - 84.6*(syllables/words)
+    var readabilityScore: Double {
+        let wc = Double(wordCount)
+        let sc = Double(sentenceCount)
+        let syllables = Double(cachedAnalysis?.syllableCount ?? wordCount)
+        guard wc > 0, sc > 0 else { return 100 }
+        let score = 206.835 - 1.015 * (wc / sc) - 84.6 * (syllables / wc)
+        return max(0, min(100, score))
+    }
+
+    /// Estimated reading time in minutes (250 wpm).
+    var readingTime: Double {
+        Double(wordCount) / 250.0
+    }
+
+    /// Estimated speaking time in minutes (150 wpm).
+    var speakingTime: Double {
+        Double(wordCount) / 150.0
+    }
+
+    // MARK: - Writing Score
+
+    /// Multi-dimensional writing score combining correctness, clarity, engagement, and delivery.
+    // MARK: - Issue Counts
 
     var spellingCount: Int { issues.filter { $0.type == .spelling && !$0.isIgnored }.count }
     var grammarCount: Int { issues.filter { $0.type == .grammar && !$0.isIgnored }.count }
+    var clarityCount: Int { issues.filter { $0.type.category == .clarity && !$0.isIgnored }.count }
+    var styleCount: Int { issues.filter { $0.type.category == .delivery && !$0.isIgnored }.count }
+    var engagementCount: Int { issues.filter { $0.type.category == .engagement && !$0.isIgnored }.count }
+
+    var totalActiveIssueCount: Int { issues.filter { !$0.isIgnored }.count }
+
+    /// Issues filtered by the currently selected category (nil = all).
+    var filteredIssues: [WritingIssue] {
+        let active = issues.filter { !$0.isIgnored }
+        guard let category = selectedCategory else { return active }
+        return active.filter { $0.type.category == category }
+    }
+
+    // MARK: - Check Scheduling
 
     private var checkTask: Task<Void, Never>?
 
@@ -112,15 +180,98 @@ final class DocumentViewModel: @unchecked Sendable {
         }
     }
 
+    /// AI-first spell check with `SpellCheckService` (NSSpellChecker) fallback.
+    /// Uses a 3 s timeout — must exceed `CloudAIService.minRequestInterval` (1 s) plus
+    /// typical network latency so the rate-limiting sleep never races the sentinel.
+    /// Silent fallback on any AI error so the user always gets spell results.
+    private func resolveSpellIssues(text: String) async -> [WritingIssue] {
+        let ai = CloudAIService.shared
+        guard ai.isConfigured else {
+            logger.debug("resolveSpellIssues: AI not configured — using SpellCheckService")
+            return await SpellCheckService.check(text: text)
+        }
+
+        // Skip AI for very short text — not worth the latency/cost.
+        guard text.count > 3 else {
+            logger.debug("resolveSpellIssues: text too short (\(text.count) chars) — using SpellCheckService")
+            return await SpellCheckService.check(text: text)
+        }
+
+        logger.debug("resolveSpellIssues: AI configured — attempting AI spell check")
+
+        let aiResult: [WritingIssue]? = await withTaskGroup(of: [WritingIssue]?.self) { group in
+            group.addTask {
+                do {
+                    return try await ai.spellCheck(text: text)
+                } catch is CancellationError {
+                    // Swift structured concurrency cancellation — superseded by a newer check.
+                    return nil
+                } catch let urlError as URLError where urlError.code == .cancelled {
+                    // URLSession task was cancelled because the parent task was cancelled.
+                    return nil
+                } catch {
+                    logger.warning("resolveSpellIssues: AI error — \(error.localizedDescription)")
+                    return nil
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return nil // timeout sentinel
+            }
+            // Return the first result (AI response or timeout nil)
+            let first = await group.next()
+            group.cancelAll()
+            return first ?? nil
+        }
+
+        if let result = aiResult {
+            logger.debug("resolveSpellIssues: AI returned \(result.count) spelling issues")
+            return result
+        }
+
+        // Don't fall through to SpellCheckService if the whole check task is already cancelled —
+        // the fallback would also be cancelled immediately, wasting work and producing noisy logs.
+        guard !Task.isCancelled else { return [] }
+
+        logger.info("resolveSpellIssues: AI unavailable or timed out — falling back to SpellCheckService")
+        return await SpellCheckService.check(text: text)
+    }
+
     func runCheck() async {
         logger.debug("runCheck: starting spell check (text length: \(self.text.count))")
-        let detected = await SpellCheckService.check(text: text)
+        let currentText = text
+
+        // Snapshot preferences before async work
+        let prefs = PreferencesManager.shared
+        let formality = prefs.formalityLevel
+        let audience = prefs.audienceLevel
+
+        // Spell check: AI first (when configured), NSSpellChecker fallback
+        async let spellIssues = resolveSpellIssues(text: currentText)
+        let analysis = NLAnalysisService.analyze(currentText, formality: formality, audience: audience)
+        let ruleIssues = RuleRegistry.runAll(text: currentText, analysis: analysis)
+
+        let detected = await spellIssues + ruleIssues
         guard !Task.isCancelled else {
-            logger.debug("runCheck: cancelled after spell check returned")
+            logger.debug("runCheck: cancelled after checks returned")
             return
         }
-        logger.debug("runCheck: spell check complete — \(detected.count) raw issues")
-        let newIssues = detected.filter { !ignoredRanges.contains(ignoredKey(for: $0)) }
+
+        cachedAnalysis = analysis
+        logger.debug("runCheck: checks complete — \(detected.count) raw issues")
+
+        // Record stats
+        WritingStatsStore.shared.recordWordCount(wordCount)
+        for issue in detected {
+            WritingStatsStore.shared.recordIssue(type: issue.type)
+        }
+
+        // Filter out persistent ignores and session ignores
+        let ignoreStore = IgnoreRulesStore.shared
+        let newIssues = detected.filter {
+            !ignoredRanges.contains(ignoredKey(for: $0))
+            && !ignoreStore.isIgnored(word: $0.word, ruleID: $0.type.categoryLabel)
+        }
 
         // Track which issues are genuinely new (not already in the list by word+range)
         // Used for the badge "unseen" indicator in the sidebar
@@ -182,6 +333,7 @@ final class DocumentViewModel: @unchecked Sendable {
         // ── Phase 1: fast @MainActor state updates ────────────────────────────
         isCorrectionInFlight = true
         lastCorrectionTime = .now
+        WritingStatsStore.shared.recordCorrection()
 
         // Always write to clipboard as a safety net / last-resort fallback
         let pasteboard = NSPasteboard.general
@@ -333,6 +485,69 @@ final class DocumentViewModel: @unchecked Sendable {
         vUp?.flags   = .maskCommand
         vDown?.post(tap: .cgAnnotatedSessionEventTap)
         vUp?.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    /// Replaces the currently selected text in the focused application.
+    /// Used by `SelectionSuggestionPanel` when applying an AI-suggested rewrite.
+    /// Unlike `applyCorrection(_:correction:)`, this works with arbitrary selections —
+    /// it sets `kAXSelectedTextAttribute` directly rather than searching for a word.
+    func replaceSelection(replacement: String) {
+        logger.info("replaceSelection: '\(replacement.prefix(40))' [START]")
+
+        isCorrectionInFlight = true
+        lastCorrectionTime = .now
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(replacement, forType: .string)
+
+        let fallbackItem = DispatchWorkItem { [weak self] in
+            logger.warning("replaceSelection: AX timed out — firing paste fallback")
+            Self.simulatePasteStatic()
+            Task { @MainActor in
+                self?.isCorrectionInFlight = false
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackItem)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let axSucceeded = Self.injectSelectedTextViaAXBackground(replacement: replacement)
+            fallbackItem.cancel()
+            if !axSucceeded {
+                logger.warning("replaceSelection: AX failed — firing paste fallback")
+                DispatchQueue.main.async { Self.simulatePasteStatic() }
+            }
+            Task { @MainActor in
+                self?.isCorrectionInFlight = false
+                logger.debug("replaceSelection: correctionInFlight cleared")
+            }
+        }
+    }
+
+    /// Replaces the currently selected text in the focused UI element.
+    /// Sets `kAXSelectedTextAttribute` directly — the selection must already exist
+    /// in the target app (the panel is non-activating, so the original selection persists).
+    private nonisolated static func injectSelectedTextViaAXBackground(replacement: String) -> Bool {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedRef
+        ) == .success,
+              let focusedRef,
+              CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
+            logger.warning("replaceSelection AX-bg: no focused element")
+            return false
+        }
+        let element = focusedRef as! AXUIElement // safe: type ID verified above
+        let result = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            replacement as CFString
+        )
+        logger.debug("replaceSelection AX-bg: result = \(result == .success ? "success" : "failed")")
+        return result == .success
     }
 
     func ignoreIssue(_ issue: WritingIssue) {

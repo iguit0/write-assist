@@ -9,7 +9,6 @@ import SwiftUI
 enum PopoverTab: String, CaseIterable {
     case issues = "Issues"
     case tools = "Tools"
-    case ai = "AI"
     case settings = "Settings"
 }
 
@@ -20,6 +19,8 @@ struct MenuBarPopoverView: View {
     @State private var isPreviewExpanded = true
     @State private var isMetricsExpanded = false
     @State private var selectedTab: PopoverTab = .issues
+    @State private var selectedTextForSuggestions: String?
+    @State private var selectedTextRange: NSRange?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,8 +39,6 @@ struct MenuBarPopoverView: View {
                     issuesList
                 case .tools:
                     ToolsPanel()
-                case .ai:
-                    AIChatPanel()
                 case .settings:
                     SettingsPanel()
                 }
@@ -276,7 +275,14 @@ struct MenuBarPopoverView: View {
             .buttonStyle(.plain)
 
             if isPreviewExpanded {
-                HighlightedTextView(text: viewModel.text, issues: viewModel.issues)
+                HighlightedTextView(
+                    text: viewModel.text,
+                    issues: viewModel.issues,
+                    onSelectionChanged: { selectedText, selectedRange in
+                        selectedTextForSuggestions = selectedText
+                        selectedTextRange = selectedRange
+                    }
+                )
                     .frame(height: min(max(CGFloat(viewModel.text.count) / 4 + 48, 56), 110))
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
@@ -395,6 +401,27 @@ struct MenuBarPopoverView: View {
                     Divider()
                 }
                 previewPanel
+                
+                // AI suggestions panel — shown when text is selected in preview
+                if let selectedText = selectedTextForSuggestions, !selectedText.isEmpty {
+                    Divider()
+                    TextSelectionSuggestionsPanel(
+                        selectedText: selectedText,
+                        onApply: { suggestion in
+                            // Write to clipboard so the user can paste the suggestion.
+                            // Full in-place replacement requires AX write-back which is
+                            // handled by the system-wide SelectionSuggestionPanel; this
+                            // in-popover panel serves the WriteAssist text preview only.
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(suggestion, forType: .string)
+                            selectedTextForSuggestions = nil
+                        },
+                        onDismiss: {
+                            selectedTextForSuggestions = nil
+                        }
+                    )
+                }
+                
                 Divider()
             }
 
@@ -1453,188 +1480,122 @@ struct StatsView: View {
     }
 }
 
-// MARK: - AI Chat Panel
+// MARK: - Text Selection AI Suggestions Panel
 
-struct AIChatPanel: View {
+struct TextSelectionSuggestionsPanel: View {
+    let selectedText: String
+    let onApply: (String) -> Void
+    let onDismiss: () -> Void
+
     @State private var aiService = CloudAIService.shared
-    @State private var inputText = ""
-    @State private var messages: [(id: UUID, role: String, content: String)] = []
+    @State private var suggestions: [String] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var appliedSuggestion: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !aiService.isConfigured {
-                aiNotConfiguredView
-            } else {
-                chatContent
-            }
-        }
-    }
-
-    private var aiNotConfiguredView: some View {
-        VStack(spacing: 12) {
-            Spacer(minLength: 20)
-            Image(systemName: aiService.provider == .ollama ? "desktopcomputer" : "sparkles")
-                .font(.system(size: 28))
-                .foregroundStyle(aiService.provider == .ollama ? .orange : .indigo)
-            Text(aiService.provider == .ollama ? "Ollama Not Ready" : "AI Not Configured")
-                .font(.system(size: 13, weight: .semibold))
-            Text(aiService.provider == .ollama
-                 ? "Select a model in Settings. Make sure Ollama is running (`ollama serve`)."
-                 : "Add your API key in Settings to use AI features like rewrites, suggestions, and chat.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            Spacer(minLength: 20)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-    }
-
-    private var chatContent: some View {
-        VStack(spacing: 0) {
-            // Messages
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if messages.isEmpty {
-                        VStack(spacing: 8) {
-                            Text("Writing Assistant")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Text("Ask me to write, improve, or summarize text.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.tertiary)
-
-                            // Quick action buttons
-                            VStack(spacing: 4) {
-                                quickActionButton("Write an email about...")
-                                quickActionButton("Improve this paragraph...")
-                                quickActionButton("Summarize this text...")
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                    }
-
-                    ForEach(messages, id: \.id) { message in
-                        chatBubble(role: message.role, content: message.content)
-                    }
-
-                    if isLoading {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.mini)
-                            Text("Thinking...")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                    }
-
-                    if let error = errorMessage {
-                        Text(error)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 12)
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.blue)
+                Text("AI Suggestions")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .buttonStyle(.plain)
             }
-            .frame(maxHeight: 300)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
 
             Divider()
 
-            // Input field
-            HStack(spacing: 6) {
-                TextField("Ask the writing assistant...", text: $inputText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                    .onSubmit { sendMessage() }
-                    .disabled(isLoading)
-
-                Button(action: sendMessage) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundStyle(inputText.isEmpty || isLoading ? Color.secondary : Color.blue)
-                }
-                .buttonStyle(.plain)
-                .disabled(inputText.isEmpty || isLoading)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-    }
-
-    private func quickActionButton(_ text: String) -> some View {
-        Button {
-            inputText = text
-        } label: {
-            Text(text)
-                .font(.system(size: 10))
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.blue.opacity(0.08))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func chatBubble(role: String, content: String) -> some View {
-        HStack {
-            if role == "user" { Spacer(minLength: 40) }
-
-            VStack(alignment: role == "user" ? .trailing : .leading, spacing: 2) {
-                Text(content)
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(role == "user"
-                                  ? Color.blue.opacity(0.15)
-                                  : Color(nsColor: .textBackgroundColor))
-                    )
-
-                if role == "assistant" {
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(content, forType: .string)
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 8))
-                            Text("Copy")
-                                .font(.system(size: 9))
-                        }
+            // Content
+            if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Getting suggestions...")
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            } else if let error = errorMessage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Error")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            } else if suggestions.isEmpty {
+                Text("No suggestions available")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(suggestions.prefix(3), id: \.self) { suggestion in
+                        SuggestionButton(
+                            suggestion: suggestion,
+                            isApplied: appliedSuggestion == suggestion,
+                            onTap: {
+                                appliedSuggestion = suggestion
+                                onApply(suggestion)
+                                Task { @MainActor in
+                                    try? await Task.sleep(for: .milliseconds(800))
+                                    onDismiss()
+                                }
+                            }
+                        )
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-
-            if role == "assistant" { Spacer(minLength: 40) }
+        }
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onAppear {
+            fetchSuggestions()
         }
     }
 
-    private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    private func fetchSuggestions() {
+        guard aiService.isConfigured else {
+            errorMessage = "AI is not configured. Add an API key in Settings."
+            return
+        }
 
-        messages.append((id: UUID(), role: "user", content: text))
-        inputText = ""
-        errorMessage = nil
         isLoading = true
+        errorMessage = nil
 
         Task {
             do {
-                let chatHistory = messages.map { (role: $0.role, content: $0.content) }
-                let response = try await aiService.chat(messages: chatHistory)
-                messages.append((id: UUID(), role: "assistant", content: response))
+                // Create a synthetic issue for the selected text
+                let issue = WritingIssue(
+                    type: .style,
+                    range: NSRange(location: 0, length: selectedText.count),
+                    word: String(selectedText.prefix(20)),
+                    message: "Improve this selection",
+                    suggestions: []
+                )
+
+                let fetchedSuggestions = try await aiService.smartSuggestions(
+                    for: issue,
+                    context: selectedText
+                )
+                suggestions = fetchedSuggestions
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -1642,3 +1603,48 @@ struct AIChatPanel: View {
         }
     }
 }
+
+// MARK: - Suggestion Button
+
+struct SuggestionButton: View {
+    let suggestion: String
+    let isApplied: Bool
+    let onTap: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: isApplied ? "checkmark.circle.fill" : "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundStyle(isApplied ? .green : .blue)
+
+                Text(suggestion)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isApplied ? .green : .primary)
+                    .lineLimit(2)
+
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(
+                        isApplied
+                            ? Color.green.opacity(0.1)
+                            : isHovered
+                            ? Color.blue.opacity(0.08)
+                            : Color.clear
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.15), value: isApplied)
+    }
+}
+
+
