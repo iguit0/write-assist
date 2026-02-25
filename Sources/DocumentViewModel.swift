@@ -396,6 +396,65 @@ final class DocumentViewModel: @unchecked Sendable {
         logger.debug("applyCorrection: Phase 1 complete, background AX dispatched [END sync]")
     }
 
+    /// Applies a snippet expansion: replaces the typed trigger with the full expansion
+    /// text using the same AX-injection + clipboard-paste fallback strategy as
+    /// `applyCorrection(_:correction:)`.
+    func applySnippet(_ snippet: Snippet) {
+        logger.info("applySnippet: '\(snippet.trigger)' → '\(snippet.expansion)' [START]")
+
+        guard !isCorrectionInFlight else {
+            logger.warning("applySnippet: correction already in flight — skipping")
+            return
+        }
+
+        isCorrectionInFlight = true
+        lastCorrectionTime = .now
+
+        // Always write expansion to clipboard as a last-resort fallback.
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(snippet.expansion, forType: .string)
+        logger.debug("applySnippet: clipboard set to expansion")
+
+        // Update the input monitor's buffer so the trigger doesn't re-fire on the
+        // next word boundary. Mark as programmatic so hudShownKeys is preserved.
+        isProgrammaticBufferUpdate = true
+        inputMonitor?.replaceInBuffer(old: snippet.trigger, new: snippet.expansion)
+        isProgrammaticBufferUpdate = false
+        logger.debug("applySnippet: buffer updated")
+
+        let trigger = snippet.trigger
+        let expansion = snippet.expansion
+
+        let fallbackItem = DispatchWorkItem { [weak self] in
+            logger.warning("applySnippet: AX timed out — firing paste fallback")
+            Self.simulatePasteStatic()
+            Task { @MainActor in
+                self?.isCorrectionInFlight = false
+                logger.debug("applySnippet: correctionInFlight cleared (timeout path)")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackItem)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            logger.debug("applySnippet: AX injection starting on background thread")
+            let axSucceeded = Self.injectCorrectionViaAXBackground(
+                word: trigger, correction: expansion
+            )
+            logger.info("applySnippet: AX injection result = \(axSucceeded)")
+            fallbackItem.cancel()
+            if !axSucceeded {
+                logger.warning("applySnippet: AX failed — firing paste fallback")
+                DispatchQueue.main.async { Self.simulatePasteStatic() }
+            }
+            Task { @MainActor in
+                self?.isCorrectionInFlight = false
+                logger.debug("applySnippet: correctionInFlight cleared (normal path)")
+            }
+        }
+        logger.debug("applySnippet: Phase 1 complete, background AX dispatched [END sync]")
+    }
+
     /// AX-based word replacement — runs on a background thread (nonisolated).
     /// Returns true if the replacement was successfully applied.
     ///

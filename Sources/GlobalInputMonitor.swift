@@ -229,6 +229,13 @@ final class GlobalInputMonitor {
             if isBoundaryKey {
                 logger.debug("handle: word boundary after '\(lastCharBeforeKey!)'")
                 onWordBoundaryTyped?()
+                // Check for snippet trigger using the text BEFORE the boundary
+                // character was appended. Trigger matching uses hasSuffix, which
+                // requires the trigger to be the final token — including the
+                // boundary character would break the match (e.g. "/sig " ≠ "/sig").
+                // Guarding on word boundaries also prevents mid-word false fires:
+                // typing "/signature" no longer expands "/sig" at the 'g' keystroke.
+                checkSnippetTrigger(text: String(buffer.dropLast()))
             }
         }
 
@@ -239,9 +246,6 @@ final class GlobalInputMonitor {
 
         let text = String(buffer)
         viewModel?.textDidChange(text)
-
-        // Check for snippet trigger
-        checkSnippetTrigger(text: text)
     }
 
     private func checkSnippetTrigger(text: String) {
