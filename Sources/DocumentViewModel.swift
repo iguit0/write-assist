@@ -342,7 +342,7 @@ final class DocumentViewModel: @unchecked Sendable {
     ///  2. If AX times out or fails: clipboard + simulated Cmd+V (session-level tap).
     ///  3. Ultimate fallback: clipboard only (correction is always on the pasteboard).
     func applyCorrection(_ issue: WritingIssue, correction: String) {
-        logger.info("applyCorrection: '\(issue.word)' → '\(correction)' [START]")
+        logger.info("applyCorrection: '\(issue.word, privacy: .sensitive)' → '\(correction, privacy: .sensitive)' [START]")
 
         // ── Phase 1: fast @MainActor state updates ────────────────────────────
         isCorrectionInFlight = true
@@ -435,7 +435,7 @@ final class DocumentViewModel: @unchecked Sendable {
     /// text using the same AX-injection + clipboard-paste fallback strategy as
     /// `applyCorrection(_:correction:)`.
     func applySnippet(_ snippet: Snippet) {
-        logger.info("applySnippet: '\(snippet.trigger)' → '\(snippet.expansion)' [START]")
+        logger.info("applySnippet: '\(snippet.trigger, privacy: .sensitive)' → '\(snippet.expansion, privacy: .sensitive)' [START]")
 
         guard !isCorrectionInFlight else {
             logger.warning("applySnippet: correction already in flight — skipping")
@@ -554,7 +554,7 @@ final class DocumentViewModel: @unchecked Sendable {
         // Find the last occurrence of the misspelled word in the element's text
         // (using the last occurrence because the buffer tracks the tail of the document)
         guard let wordRange = fullText.range(of: word, options: .backwards) else {
-            logger.warning("AX-bg: word '\(word)' not found in element text")
+            logger.warning("AX-bg: word '\(word, privacy: .sensitive)' not found in element text")
             return false
         }
         let nsRange = NSRange(wordRange, in: fullText)
@@ -576,7 +576,7 @@ final class DocumentViewModel: @unchecked Sendable {
         }
 
         // Replace selected text with the correction
-        logger.debug("AX-bg: setting selected text to '\(correction)'")
+        logger.debug("AX-bg: setting selected text (length: \(correction.count))")
         let setTextResult = AXUIElementSetAttributeValue(
             element,
             kAXSelectedTextAttribute as CFString,
@@ -606,7 +606,7 @@ final class DocumentViewModel: @unchecked Sendable {
     /// Unlike `applyCorrection(_:correction:)`, this works with arbitrary selections —
     /// it sets `kAXSelectedTextAttribute` directly rather than searching for a word.
     func replaceSelection(replacement: String) {
-        logger.info("replaceSelection: '\(replacement.prefix(40))' [START]")
+        logger.info("replaceSelection: length=\(replacement.count) [START]")
 
         isCorrectionInFlight = true
         lastCorrectionTime = .now

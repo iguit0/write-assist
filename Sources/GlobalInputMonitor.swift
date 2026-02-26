@@ -227,7 +227,7 @@ final class GlobalInputMonitor {
                 } ?? false
             }
             if isBoundaryKey {
-                logger.debug("handle: word boundary after '\(lastCharBeforeKey!)'")
+                logger.debug("handle: word boundary after '\(String(lastCharBeforeKey!), privacy: .sensitive)'")
                 onWordBoundaryTyped?()
                 // Check for snippet trigger using the text BEFORE the boundary
                 // character was appended. Trigger matching uses hasSuffix, which
@@ -269,11 +269,11 @@ final class GlobalInputMonitor {
     /// Called after a correction is applied so the buffer reflects the corrected text
     /// and subsequent spell checks don't re-detect the already-corrected word.
     func replaceInBuffer(old: String, new: String) {
-        logger.debug("replaceInBuffer: '\(old)' → '\(new)'")
+        logger.debug("replaceInBuffer: old=\(old.count) chars → new=\(new.count) chars")
         let text = String(buffer)
         // Find the last occurrence of the old word in the current buffer text
         guard let range = text.range(of: old, options: .backwards) else {
-            logger.warning("replaceInBuffer: '\(old)' not found in buffer")
+            logger.warning("replaceInBuffer: word (length: \(old.count)) not found in buffer")
             return
         }
         let corrected = text.replacingCharacters(in: range, with: new)

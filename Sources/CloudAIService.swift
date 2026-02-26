@@ -22,6 +22,7 @@ enum CloudAIError: Error, LocalizedError {
     case ollamaModelNotFound(String)
     case ollamaNoModelsAvailable
     case ollamaTimeout
+    case ollamaURLNotSafe
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,7 @@ enum CloudAIError: Error, LocalizedError {
         case .ollamaModelNotFound(let m): return "Model '\(m)' not found. Run `ollama pull \(m)` to download it."
         case .ollamaNoModelsAvailable: return "No models installed. Run `ollama pull llama3.2` to get started."
         case .ollamaTimeout:         return "Model is taking too long. Try a smaller model or check system resources."
+        case .ollamaURLNotSafe:      return "Ollama URL must be a local address (localhost or 127.0.0.1) to protect your text from being sent to a remote host."
         }
     }
 }
@@ -136,6 +138,7 @@ final class CloudAIService: @unchecked Sendable {
 
         switch provider {
         case .ollama:
+            guard isOllamaURLSafe else { throw CloudAIError.ollamaURLNotSafe }
             let service = makeOllamaService()
             return try await service.complete(prompt: prompt, systemPrompt: systemPrompt)
         case .anthropic:
@@ -278,6 +281,7 @@ final class CloudAIService: @unchecked Sendable {
 
         switch provider {
         case .ollama:
+            guard isOllamaURLSafe else { throw CloudAIError.ollamaURLNotSafe }
             let service = makeOllamaService()
             return try await service.chat(
                 messages: messages,
@@ -413,6 +417,14 @@ final class CloudAIService: @unchecked Sendable {
     }
 
     // MARK: - Ollama Helpers
+
+    /// Returns `true` when `ollamaBaseURL` resolves to a loopback address.
+    /// Prevents SSRF: user text must never be forwarded to an arbitrary remote host.
+    var isOllamaURLSafe: Bool {
+        guard let url = URL(string: ollamaBaseURL),
+              let host = url.host else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
 
     var ollamaBaseURLValue: URL {
         URL(string: ollamaBaseURL) ?? URL(string: "http://localhost:11434")!

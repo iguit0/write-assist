@@ -70,17 +70,17 @@ final class ExternalSpellChecker {
 
         // Skip words in personal dictionary
         guard !PersonalDictionary.shared.containsWord(word) else {
-            logger.debug("runCheck: '\(word)' is in personal dictionary — skipping")
+            logger.debug("runCheck: '\(word, privacy: .sensitive)' is in personal dictionary — skipping")
             return
         }
 
         // Spell-check (synchronous NSSpellChecker — typically < 5 ms)
         guard let suggestions = Self.spellCheckWord(word) else {
-            logger.debug("runCheck: '\(word)' is correctly spelled")
+            logger.debug("runCheck: '\(word, privacy: .sensitive)' is correctly spelled")
             return
         }
 
-        logger.info("runCheck: '\(word)' is misspelled → \(suggestions.count) suggestions")
+        logger.info("runCheck: '\(word, privacy: .sensitive)' is misspelled → \(suggestions.count) suggestions")
 
         let issue = WritingIssue(
             type: .spelling,

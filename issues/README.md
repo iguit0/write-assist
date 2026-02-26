@@ -43,8 +43,6 @@ All P0 issues resolved. ✅
 
 | # | Title | Status |
 |---|-------|--------|
-| [015](015-user-text-logged-at-debug-level.md) | User text logged at `info`/`debug` level — privacy concern | 🆕 New |
-| [016](016-ollama-url-not-validated-to-localhost.md) | Ollama base URL not validated as loopback — SSRF risk | 🆕 New |
 | [017](017-no-certificate-pinning-for-ai-api-calls.md) | No certificate pinning for Anthropic/OpenAI API calls | 🆕 New |
 
 ## Architecture & Code Quality (P2)

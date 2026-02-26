@@ -75,7 +75,7 @@ final class ErrorHUDPanel {
             return
         }
 
-        logger.info("show: presenting HUD for '\(issue.word)'")
+        logger.info("show: presenting HUD for '\(issue.word, privacy: .sensitive)'")
 
         // Force-remove any panel including one mid-fade-out animation
         panel?.alphaValue = 0
@@ -102,12 +102,12 @@ final class ErrorHUDPanel {
         // Store for keyboard navigation
         currentSuggestions = Array(issue.suggestions.prefix(4))
         onApplyCallback = { [weak self, weak viewModel] suggestion in
-            logger.debug("onApply: user selected '\(suggestion)' for '\(issue.word)'")
+            logger.debug("onApply: user selected '\(suggestion, privacy: .sensitive)' for '\(issue.word, privacy: .sensitive)'")
             self?.dismiss()
             viewModel?.applyCorrection(issue, correction: suggestion)
         }
         onIgnoreCallback = { [weak self, weak viewModel] in
-            logger.debug("onIgnore: user ignored '\(issue.word)'")
+            logger.debug("onIgnore: user ignored '\(issue.word, privacy: .sensitive)'")
             viewModel?.ignoreIssue(issue)
             self?.dismiss()
         }
@@ -216,7 +216,7 @@ final class ErrorHUDPanel {
                     }
                 } else if let index = kbs.selectedIndex, index < currentSuggestions.count {
                     let suggestion = currentSuggestions[index]
-                    logger.debug("handleKeyEvent: ↵ — applying '\(suggestion)'")
+                    logger.debug("handleKeyEvent: ↵ — applying '\(suggestion, privacy: .sensitive)'")
                     onApplyCallback?(suggestion)
                 }
             }

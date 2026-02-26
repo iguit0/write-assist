@@ -993,6 +993,23 @@ struct SettingsPanel: View {
                 Spacer()
             }
 
+            // Non-loopback URL security warning
+            if !aiService.isOllamaURLSafe {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                    Text("Security: URL must be localhost or 127.0.0.1. Remote URLs are blocked to prevent your text from being sent to an unknown host.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(.rect(cornerRadius: 4))
+            }
+
             // Model picker
             if ollamaReachable == true {
                 HStack(spacing: 6) {
