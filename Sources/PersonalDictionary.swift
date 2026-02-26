@@ -15,8 +15,21 @@ final class PersonalDictionary: @unchecked Sendable {
     private let storageKey = "personalDictionaryWords"
 
     private init() {
-        // Load from UserDefaults
-        words = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+        // Load from UserDefaults and migrate to lowercase for case-insensitive lookup
+        let loaded = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+        var seen = Set<String>()
+        var migrated: [String] = []
+        for word in loaded {
+            let lower = word.lowercased()
+            if seen.insert(lower).inserted {
+                migrated.append(lower)
+            }
+        }
+        words = migrated.sorted()
+        // Persist migration if any words changed casing or were deduplicated
+        if migrated.count != loaded.count || zip(migrated, loaded).contains(where: { $0 != $1 }) {
+            UserDefaults.standard.set(words, forKey: storageKey)
+        }
         // Ensure all words are learned by NSSpellChecker
         let checker = NSSpellChecker.shared
         for word in words {
@@ -26,24 +39,25 @@ final class PersonalDictionary: @unchecked Sendable {
     }
 
     func addWord(_ word: String) {
-        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !words.contains(trimmed) else { return }
-        words.append(trimmed)
+        let lower = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty, !words.contains(lower) else { return }
+        words.append(lower)
         words.sort()
         save()
-        NSSpellChecker.shared.learnWord(trimmed)
-        logger.info("Learned word: '\(trimmed)'")
+        NSSpellChecker.shared.learnWord(lower)
+        logger.info("Learned word: '\(lower)'")
     }
 
     func removeWord(_ word: String) {
-        words.removeAll { $0 == word }
+        let lower = word.lowercased()
+        words.removeAll { $0 == lower }
         save()
-        NSSpellChecker.shared.unlearnWord(word)
-        logger.info("Unlearned word: '\(word)'")
+        NSSpellChecker.shared.unlearnWord(lower)
+        logger.info("Unlearned word: '\(lower)'")
     }
 
     func containsWord(_ word: String) -> Bool {
-        words.contains(word)
+        words.contains(word.lowercased())
     }
 
     private func save() {

@@ -22,28 +22,37 @@ final class IgnoreRulesStore: @unchecked Sendable {
     private init() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode(Set<IgnoreRule>.self, from: data) {
-            rules = decoded
+            // Migrate existing rules: normalise word to lowercase for case-insensitive matching
+            let migrated = Set(decoded.map { IgnoreRule(word: $0.word.lowercased(), ruleID: $0.ruleID) })
+            if migrated != decoded {
+                rules = migrated
+                save()
+            } else {
+                rules = decoded
+            }
         }
         logger.info("IgnoreRulesStore loaded \(self.rules.count) rules")
     }
 
     func addRule(word: String, ruleID: String? = nil) {
-        let rule = IgnoreRule(word: word, ruleID: ruleID)
+        let rule = IgnoreRule(word: word.lowercased(), ruleID: ruleID)
         guard !rules.contains(rule) else { return }
         rules.insert(rule)
         save()
-        logger.info("Added ignore rule: '\(word)' for rule: \(ruleID ?? "all")")
+        logger.info("Added ignore rule: '\(rule.word)' for rule: \(ruleID ?? "all")")
     }
 
     func removeRule(_ rule: IgnoreRule) {
-        rules.remove(rule)
+        let normalised = IgnoreRule(word: rule.word.lowercased(), ruleID: rule.ruleID)
+        rules.remove(normalised)
         save()
-        logger.info("Removed ignore rule: '\(rule.word)'")
+        logger.info("Removed ignore rule: '\(normalised.word)'")
     }
 
     func isIgnored(word: String, ruleID: String) -> Bool {
-        rules.contains(IgnoreRule(word: word, ruleID: ruleID))
-            || rules.contains(IgnoreRule(word: word, ruleID: nil))
+        let lower = word.lowercased()
+        return rules.contains(IgnoreRule(word: lower, ruleID: ruleID))
+            || rules.contains(IgnoreRule(word: lower, ruleID: nil))
     }
 
     func clearAll() {

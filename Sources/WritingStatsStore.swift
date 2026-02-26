@@ -37,7 +37,7 @@ final class WritingStatsStore: @unchecked Sendable {
     }
 
     func recordWordCount(_ count: Int) {
-        currentSessionWordCount = max(currentSessionWordCount, count)
+        currentSessionWordCount = count
     }
 
     func recordIssue(type: IssueType) {
