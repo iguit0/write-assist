@@ -28,10 +28,19 @@ enum RuleRegistry {
 
     @MainActor
     static func runAll(text: String, analysis: NLAnalysis) -> [WritingIssue] {
-        let prefs = PreferencesManager.shared
+        runAll(text: text, analysis: analysis, disabledRules: PreferencesManager.shared.disabledRules)
+    }
+
+    /// Nonisolated overload for use from `Task.detached`. Accepts a pre-snapshotted
+    /// `disabledRules` set so it does not need to touch `@MainActor` PreferencesManager.
+    nonisolated static func runAll(
+        text: String,
+        analysis: NLAnalysis,
+        disabledRules: Set<String>
+    ) -> [WritingIssue] {
         var issues: [WritingIssue] = []
         for rule in allRules {
-            guard prefs.isRuleEnabled(rule.ruleID) else { continue }
+            guard !disabledRules.contains(rule.ruleID) else { continue }
             issues.append(contentsOf: rule.check(text: text, analysis: analysis))
         }
         return issues

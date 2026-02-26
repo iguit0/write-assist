@@ -10,9 +10,7 @@ struct CapitalizationRule: WritingRule {
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         var issues: [WritingIssue] = []
 
-        for sentence in analysis.sentences {
-            // Find where this sentence starts in the original text
-            guard let sentenceRange = text.range(of: sentence) else { continue }
+        for (sentence, sentenceRange) in analysis.sentenceRanges {
             let nsRange = NSRange(sentenceRange, in: text)
 
             // Skip sentences that start with a number or symbol

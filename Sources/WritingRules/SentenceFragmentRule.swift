@@ -13,7 +13,7 @@ struct SentenceFragmentRule: WritingRule {
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         var issues: [WritingIssue] = []
 
-        for sentence in analysis.sentences {
+        for (sentence, sentenceRange) in analysis.sentenceRanges {
             let wordCount = sentence.split(whereSeparator: { $0.isWhitespace }).count
             guard wordCount >= Self.minWordsForCheck else { continue }
 
@@ -35,8 +35,7 @@ struct SentenceFragmentRule: WritingRule {
             }
 
             if !hasVerb {
-                guard let range = text.range(of: sentence) else { continue }
-                let nsRange = NSRange(range, in: text)
+                let nsRange = NSRange(sentenceRange, in: text)
                 let truncated: String
                 if sentence.count > 30 {
                     truncated = String(sentence.prefix(27)) + "..."

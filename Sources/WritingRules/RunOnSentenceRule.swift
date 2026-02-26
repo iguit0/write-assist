@@ -12,12 +12,11 @@ struct RunOnSentenceRule: WritingRule {
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         var issues: [WritingIssue] = []
 
-        for sentence in analysis.sentences {
+        for (sentence, sentenceRange) in analysis.sentenceRanges {
             let words = sentence.split(whereSeparator: { $0.isWhitespace })
             guard words.count > Self.wordThreshold else { continue }
 
-            guard let range = text.range(of: sentence) else { continue }
-            let nsRange = NSRange(range, in: text)
+            let nsRange = NSRange(sentenceRange, in: text)
 
             let truncated = words.prefix(6).joined(separator: " ") + "..."
             issues.append(WritingIssue(

@@ -25,7 +25,12 @@ enum DetectedTone: String, Sendable {
 }
 
 struct NLAnalysis: Sendable {
-    let sentences: [String]
+    /// Each element pairs the sentence string with its exact range in the
+    /// original text, as reported by NLTokenizer. Use this range in rules
+    /// instead of re-searching with text.range(of:) to avoid duplicate-sentence bugs.
+    let sentenceRanges: [(sentence: String, range: Range<String.Index>)]
+    // Backward-compat accessor — keeps callers that just need the strings working.
+    var sentences: [String] { sentenceRanges.map(\.sentence) }
     let words: [String]
     let wordPOSTags: [(word: String, tag: NLTag?, range: Range<String.Index>)]
     let syllableCount: Int
@@ -58,7 +63,7 @@ enum NLAnalysisService {
         formality: FormalityLevel = .neutral,
         audience: AudienceLevel = .general
     ) -> NLAnalysis {
-        let sentences = tokenizeSentences(text)
+        let sentenceRanges = tokenizeSentences(text)
         let words = tokenizeWords(text)
         let posTags = tagPartsOfSpeech(text)
         let syllables = countSyllables(words: words)
@@ -66,7 +71,7 @@ enum NLAnalysisService {
         let tone = detectTone(text: text, words: words, frequency: frequency)
 
         return NLAnalysis(
-            sentences: sentences,
+            sentenceRanges: sentenceRanges,
             words: words,
             wordPOSTags: posTags,
             syllableCount: syllables,
@@ -79,18 +84,18 @@ enum NLAnalysisService {
 
     // MARK: - Tokenization
 
-    static func tokenizeSentences(_ text: String) -> [String] {
+    static func tokenizeSentences(_ text: String) -> [(sentence: String, range: Range<String.Index>)] {
         let tokenizer = NLTokenizer(unit: .sentence)
         tokenizer.string = text
-        var sentences: [String] = []
+        var results: [(sentence: String, range: Range<String.Index>)] = []
         tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
             let sentence = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !sentence.isEmpty {
-                sentences.append(sentence)
+                results.append((sentence: sentence, range: range))
             }
             return true
         }
-        return sentences
+        return results
     }
 
     static func tokenizeWords(_ text: String) -> [String] {

@@ -245,11 +245,25 @@ final class DocumentViewModel: @unchecked Sendable {
         let prefs = PreferencesManager.shared
         let formality = prefs.formalityLevel
         let audience = prefs.audienceLevel
+        let disabledRules = prefs.disabledRules
 
         // Spell check: AI first (when configured), NSSpellChecker fallback
+        // NL analysis + rule engine: both moved off @MainActor so they don't block
+        // SwiftUI layout or input handling (NLTagger init is 50-200 ms on first use).
         async let spellIssues = resolveSpellIssues(text: currentText)
-        let analysis = NLAnalysisService.analyze(currentText, formality: formality, audience: audience)
-        let ruleIssues = RuleRegistry.runAll(text: currentText, analysis: analysis)
+        let (analysis, ruleIssues) = await Task.detached(priority: .userInitiated) {
+            let analysis = NLAnalysisService.analyze(
+                currentText,
+                formality: formality,
+                audience: audience
+            )
+            let ruleIssues = RuleRegistry.runAll(
+                text: currentText,
+                analysis: analysis,
+                disabledRules: disabledRules
+            )
+            return (analysis, ruleIssues)
+        }.value
 
         let detected = await spellIssues + ruleIssues
         guard !Task.isCancelled else {
@@ -335,11 +349,10 @@ final class DocumentViewModel: @unchecked Sendable {
         lastCorrectionTime = .now
         WritingStatsStore.shared.recordCorrection()
 
-        // Always write to clipboard as a safety net / last-resort fallback
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(correction, forType: .string)
-        logger.debug("applyCorrection: clipboard set")
+        // Save existing clipboard content so we can restore it if the paste fallback fires.
+        // The AX injection path never touches the clipboard, so the user's copied content
+        // is preserved whenever AX succeeds (the common case).
+        let previousClipboard = NSPasteboard.general.string(forType: .string)
 
         // Remove issue from local list immediately so sidebar UI updates now
         issues.removeAll { $0.id == issue.id }
@@ -368,7 +381,17 @@ final class DocumentViewModel: @unchecked Sendable {
         let word = issue.word
         let fallbackItem = DispatchWorkItem { [weak self] in
             logger.warning("applyCorrection: AX timed out — firing paste fallback")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(correction, forType: .string)
             Self.simulatePasteStatic()
+            if let prev = previousClipboard {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prev, forType: .string)
+                }
+            }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
                 logger.debug("applyCorrection: correctionInFlight cleared (timeout path)")
@@ -386,7 +409,19 @@ final class DocumentViewModel: @unchecked Sendable {
             fallbackItem.cancel()
             if !axSucceeded {
                 logger.warning("applyCorrection: AX failed — firing paste fallback")
-                DispatchQueue.main.async { Self.simulatePasteStatic() }
+                DispatchQueue.main.async {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(correction, forType: .string)
+                    Self.simulatePasteStatic()
+                    if let prev = previousClipboard {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(300))
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(prev, forType: .string)
+                        }
+                    }
+                }
             }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
@@ -410,11 +445,9 @@ final class DocumentViewModel: @unchecked Sendable {
         isCorrectionInFlight = true
         lastCorrectionTime = .now
 
-        // Always write expansion to clipboard as a last-resort fallback.
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(snippet.expansion, forType: .string)
-        logger.debug("applySnippet: clipboard set to expansion")
+        // Save existing clipboard content so we can restore it if the paste fallback fires.
+        let previousClipboard = NSPasteboard.general.string(forType: .string)
+        logger.debug("applySnippet: previous clipboard saved")
 
         // Update the input monitor's buffer so the trigger doesn't re-fire on the
         // next word boundary. Mark as programmatic so hudShownKeys is preserved.
@@ -428,7 +461,17 @@ final class DocumentViewModel: @unchecked Sendable {
 
         let fallbackItem = DispatchWorkItem { [weak self] in
             logger.warning("applySnippet: AX timed out — firing paste fallback")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(expansion, forType: .string)
             Self.simulatePasteStatic()
+            if let prev = previousClipboard {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prev, forType: .string)
+                }
+            }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
                 logger.debug("applySnippet: correctionInFlight cleared (timeout path)")
@@ -445,7 +488,19 @@ final class DocumentViewModel: @unchecked Sendable {
             fallbackItem.cancel()
             if !axSucceeded {
                 logger.warning("applySnippet: AX failed — firing paste fallback")
-                DispatchQueue.main.async { Self.simulatePasteStatic() }
+                DispatchQueue.main.async {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(expansion, forType: .string)
+                    Self.simulatePasteStatic()
+                    if let prev = previousClipboard {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(300))
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(prev, forType: .string)
+                        }
+                    }
+                }
             }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
@@ -556,13 +611,22 @@ final class DocumentViewModel: @unchecked Sendable {
         isCorrectionInFlight = true
         lastCorrectionTime = .now
 
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(replacement, forType: .string)
+        // Save existing clipboard content so we can restore it if the paste fallback fires.
+        let previousClipboard = NSPasteboard.general.string(forType: .string)
 
         let fallbackItem = DispatchWorkItem { [weak self] in
             logger.warning("replaceSelection: AX timed out — firing paste fallback")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(replacement, forType: .string)
             Self.simulatePasteStatic()
+            if let prev = previousClipboard {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prev, forType: .string)
+                }
+            }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
             }
@@ -574,7 +638,19 @@ final class DocumentViewModel: @unchecked Sendable {
             fallbackItem.cancel()
             if !axSucceeded {
                 logger.warning("replaceSelection: AX failed — firing paste fallback")
-                DispatchQueue.main.async { Self.simulatePasteStatic() }
+                DispatchQueue.main.async {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(replacement, forType: .string)
+                    Self.simulatePasteStatic()
+                    if let prev = previousClipboard {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(300))
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(prev, forType: .string)
+                        }
+                    }
+                }
             }
             Task { @MainActor in
                 self?.isCorrectionInFlight = false
