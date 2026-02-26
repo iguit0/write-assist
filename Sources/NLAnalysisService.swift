@@ -58,6 +58,16 @@ struct NLAnalysis: Sendable {
 }
 
 enum NLAnalysisService {
+    // Cached NL processors — allocated once and reused across analysis calls.
+    // Allocation cost: 50-200ms on first use (framework lazy-loads CoreNLP models).
+    // Protected by `nlLock` because NLTokenizer/NLTagger are not thread-safe.
+    // In production, DocumentViewModel's 200ms debounce ensures serial access.
+    // In tests, the lock prevents concurrent calls from corrupting string indices.
+    private nonisolated(unsafe) static let nlLock = NSLock()
+    private nonisolated(unsafe) static let sentenceTokenizer = NLTokenizer(unit: .sentence)
+    private nonisolated(unsafe) static let wordTokenizer = NLTokenizer(unit: .word)
+    private nonisolated(unsafe) static let posTagger = NLTagger(tagSchemes: [.lexicalClass])
+
     static func analyze(
         _ text: String,
         formality: FormalityLevel = .neutral,
@@ -85,7 +95,8 @@ enum NLAnalysisService {
     // MARK: - Tokenization
 
     static func tokenizeSentences(_ text: String) -> [(sentence: String, range: Range<String.Index>)] {
-        let tokenizer = NLTokenizer(unit: .sentence)
+        nlLock.lock(); defer { nlLock.unlock() }
+        let tokenizer = sentenceTokenizer
         tokenizer.string = text
         var results: [(sentence: String, range: Range<String.Index>)] = []
         tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
@@ -95,24 +106,28 @@ enum NLAnalysisService {
             }
             return true
         }
+        tokenizer.string = nil // release reference to avoid holding large strings
         return results
     }
 
     static func tokenizeWords(_ text: String) -> [String] {
-        let tokenizer = NLTokenizer(unit: .word)
+        nlLock.lock(); defer { nlLock.unlock() }
+        let tokenizer = wordTokenizer
         tokenizer.string = text
         var words: [String] = []
         tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
             words.append(String(text[range]))
             return true
         }
+        tokenizer.string = nil
         return words
     }
 
     // MARK: - POS Tagging
 
     static func tagPartsOfSpeech(_ text: String) -> [(word: String, tag: NLTag?, range: Range<String.Index>)] {
-        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        nlLock.lock(); defer { nlLock.unlock() }
+        let tagger = posTagger
         tagger.string = text
         var results: [(word: String, tag: NLTag?, range: Range<String.Index>)] = []
         tagger.enumerateTags(
@@ -124,6 +139,7 @@ enum NLAnalysisService {
             results.append((word: String(text[range]), tag: tag, range: range))
             return true
         }
+        tagger.string = nil
         return results
     }
 

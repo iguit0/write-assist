@@ -84,6 +84,7 @@ final class ExternalSpellChecker {
 
         let issue = WritingIssue(
             type: .spelling,
+            ruleID: "spelling",
             range: range,
             word: word,
             message: "Misspelled word",
@@ -138,32 +139,13 @@ final class ExternalSpellChecker {
     /// Reads the word immediately before the text cursor in the focused UI element.
     /// Returns `nil` if the element is part of WriteAssist itself, if there is an
     /// active text selection, if the AX read fails, or if no eligible word is found.
+    /// Uses `AXHelper` and a limited text window to avoid reading the full document (#020, #029).
     private nonisolated static func readWordBeforeCursor() -> (String, NSRange, CGRect)? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        ) == .success,
-              let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else { return nil }
-
-        let element = focusedRef as! AXUIElement // safe: type ID verified above
-
         // Skip WriteAssist's own text fields — DocumentViewModel handles those.
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        if pid == ProcessInfo.processInfo.processIdentifier { return nil }
+        guard let element = AXHelper.focusedElement(skipSelf: true) else { return nil }
 
-        // Get the cursor position (kAXSelectedTextRange → CFRange).
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            &rangeRef
-        ) == .success, let rangeRef else { return nil }
+        // Get the cursor position via AXHelper.
+        guard let rangeRef = AXHelper.selectedRangeRef(of: element) else { return nil }
 
         var cfRange = CFRange(location: 0, length: 0)
         // Safe force-cast: kAXSelectedTextRangeAttribute always returns AXValue.
@@ -175,36 +157,42 @@ final class ExternalSpellChecker {
         guard cfRange.length == 0 else { return nil }
         let cursorUTF16 = cfRange.location
 
-        // Read the full text of the element.
-        var textRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            &textRef
-        ) == .success,
-              let textRef,
-              let fullText = textRef as? String,
-              !fullText.isEmpty
+        // Read only a window of text ending at the cursor position (#029).
+        // Previously read kAXValueAttribute (full document); now uses
+        // kAXStringForRangeParameterizedAttribute to fetch ≤100 chars.
+        let windowSize = 100
+        let windowStart = max(0, cursorUTF16 - windowSize)
+        let windowLength = cursorUTF16 - windowStart
+        guard windowLength > 0 else { return nil }
+
+        var cfWindowRange = CFRange(location: windowStart, length: windowLength)
+        let windowText: String
+        if let axRange = AXValueCreate(.cfRange, &cfWindowRange),
+           let substr = AXHelper.string(for: axRange, in: element),
+           !substr.isEmpty {
+            windowText = substr
+        } else {
+            // Fallback: read full text if parameterized read fails (some apps don't support it)
+            guard let full = AXHelper.stringValue(of: element), !full.isEmpty else { return nil }
+            windowText = full
+        }
+
+        // cursorUTF16 relative to the window start
+        let localCursor = cursorUTF16 - windowStart
+
+        // Extract the word that ends just before the cursor (adjusted to window).
+        guard let (word, wordRangeLocal) = extractWordBefore(cursorUTF16: localCursor, in: windowText)
         else { return nil }
 
-        // Extract the word that ends just before the cursor.
-        guard let (word, wordRange) = extractWordBefore(cursorUTF16: cursorUTF16, in: fullText)
-        else { return nil }
+        // Translate word range back to global document coordinates.
+        let wordRange = NSRange(location: wordRangeLocal.location + windowStart,
+                                length: wordRangeLocal.length)
 
         // Query AX for the on-screen bounds of the word (for HUD positioning).
         var cfWordRange = CFRange(location: wordRange.location, length: wordRange.length)
         var bounds = CGRect.zero
         if let axWordRange = AXValueCreate(.cfRange, &cfWordRange) {
-            var boundsRef: CFTypeRef?
-            if AXUIElementCopyParameterizedAttributeValue(
-                element,
-                kAXBoundsForRangeParameterizedAttribute as CFString,
-                axWordRange,
-                &boundsRef
-            ) == .success, let boundsRef {
-                // Safe force-cast: kAXBoundsForRangeParameterizedAttribute returns AXValue.
-                AXValueGetValue(boundsRef as! AXValue, .cgRect, &bounds)
-            }
+            bounds = AXHelper.bounds(for: axWordRange, in: element) ?? .zero
         }
 
         return (word, wordRange, bounds)

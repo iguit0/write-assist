@@ -124,17 +124,25 @@ final class CloudAIService: @unchecked Sendable {
     func complete(prompt: String, systemPrompt: String) async throws -> String {
         // Rate limiting — sleep only the *remaining* time to reach the minimum interval,
         // not the full interval, to avoid unnecessarily exceeding caller-imposed timeouts.
+        // IMPORTANT: stamp lastRequestTime to the intended wake-up moment BEFORE sleeping.
+        // Stamping after the sleep creates a race: two concurrent callers can both pass the
+        // elapsed-time check before either has slept, letting both bypass the rate limiter.
+        let nextAllowed: ContinuousClock.Instant
         if let lastTime = lastRequestTime {
             let elapsed = ContinuousClock.now - lastTime
             if elapsed < minRequestInterval {
-                try await Task.sleep(for: minRequestInterval - elapsed)
+                nextAllowed = .now + (minRequestInterval - elapsed)
+                lastRequestTime = nextAllowed
+                try await Task.sleep(until: nextAllowed, clock: .continuous)
+            } else {
+                lastRequestTime = .now
             }
+        } else {
+            lastRequestTime = .now
         }
 
         isProcessing = true
         defer { isProcessing = false }
-
-        lastRequestTime = .now
 
         switch provider {
         case .ollama:
@@ -261,6 +269,7 @@ final class CloudAIService: @unchecked Sendable {
 
             issues.append(WritingIssue(
                 type: .spelling,
+                ruleID: "spelling",
                 range: resolvedRange,
                 word: word,
                 message: "Misspelled word",
@@ -306,8 +315,9 @@ final class CloudAIService: @unchecked Sendable {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
+        let modelName = PreferencesManager.shared.anthropicModelName
         let body: [String: Any] = [
-            "model": "claude-sonnet-4-20250514",
+            "model": modelName,
             "max_tokens": 1024,
             "system": systemPrompt,
             "messages": [
@@ -345,9 +355,10 @@ final class CloudAIService: @unchecked Sendable {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
+        let modelName = PreferencesManager.shared.anthropicModelName
         let apiMessages = messages.map { ["role": $0.role, "content": $0.content] }
         let body: [String: Any] = [
-            "model": "claude-sonnet-4-20250514",
+            "model": modelName,
             "max_tokens": 2048,
             "system": AIPromptTemplates.chatAssistantPrompt(),
             "messages": apiMessages
@@ -384,8 +395,9 @@ final class CloudAIService: @unchecked Sendable {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
+        let modelName = PreferencesManager.shared.openAIModelName
         let body: [String: Any] = [
-            "model": "gpt-4o-mini",
+            "model": modelName,
             "max_tokens": 1024,
             "messages": [
                 ["role": "system", "content": systemPrompt],
@@ -454,8 +466,9 @@ final class CloudAIService: @unchecked Sendable {
         ]
         apiMessages.append(contentsOf: messages.map { ["role": $0.role, "content": $0.content] })
 
+        let modelName = PreferencesManager.shared.openAIModelName
         let body: [String: Any] = [
-            "model": "gpt-4o-mini",
+            "model": modelName,
             "max_tokens": 2048,
             "messages": apiMessages
         ]

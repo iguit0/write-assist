@@ -14,7 +14,7 @@ private let logger = Logger(subsystem: "com.writeassist", category: "StatusBarCo
 /// All mutable state is on `@MainActor`. `@unchecked Sendable` is required
 /// for callbacks captured across actor boundaries in Task closures.
 @MainActor
-final class StatusBarController: NSObject, @unchecked Sendable {
+public final class StatusBarController: NSObject, @unchecked Sendable {
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
@@ -32,7 +32,9 @@ final class StatusBarController: NSObject, @unchecked Sendable {
     private weak var viewModel: DocumentViewModel?
     private var badgeObserver: Task<Void, Never>?
 
-    func setup(viewModel: DocumentViewModel, inputMonitor: GlobalInputMonitor) {
+    public override init() { super.init() }
+
+    public func setup(viewModel: DocumentViewModel, inputMonitor: GlobalInputMonitor) {
         self.viewModel = viewModel
         hudPanel = ErrorHUDPanel()
         selectionPanel = SelectionSuggestionPanel(viewModel: viewModel)
@@ -187,7 +189,7 @@ final class StatusBarController: NSObject, @unchecked Sendable {
         registerGlobalHotkey()
     }
 
-    func teardown() {
+    public func teardown() {
         badgeObserver?.cancel()
         badgeObserver = nil
         externalSpellChecker?.cancel()
@@ -209,34 +211,34 @@ final class StatusBarController: NSObject, @unchecked Sendable {
 
     // MARK: - Badge
 
-    /// Poll the view model periodically to update the badge count and animate
-    /// the status bar icon when new issues are detected.
-    /// HUD display is handled via the direct `onNewIssuesReadyForHUD` callback
-    /// (set up in `setup()`) to avoid polling latency.
+    /// Reactively observe badge-relevant state in DocumentViewModel.
+    /// Uses `withObservationTracking` so updates fire immediately when
+    /// `totalActiveIssueCount` or `unseenIssueIDs` change — no polling overhead.
     private func startBadgeObserver(viewModel: DocumentViewModel) {
+        observeBadgeChanges(viewModel: viewModel)
+    }
+
+    private func observeBadgeChanges(viewModel: DocumentViewModel) {
         badgeObserver = Task { @MainActor [weak self] in
-            var lastCount = -1
-            var lastUnseenCount = 0
-            while !Task.isCancelled {
-                let count = viewModel.totalActiveIssueCount
-                if count != lastCount {
-                    lastCount = count
-                    self?.updateBadge(count: count)
-                }
-
-                // Animate the status bar icon when new unseen issues arrive
-                let unseenCount = viewModel.unseenIssueIDs.count
-                if unseenCount > lastUnseenCount && unseenCount > 0 {
-                    self?.animateNewErrors(viewModel: viewModel)
-                }
-                lastUnseenCount = unseenCount
-
-                do {
-                    try await Task.sleep(for: .milliseconds(300))
-                } catch {
-                    break // Task cancelled — exit loop cleanly
+            guard let self else { return }
+            // Capture current values inside the tracking closure; the onChange
+            // callback fires once when any accessed property changes.
+            var count = 0
+            withObservationTracking {
+                count = viewModel.totalActiveIssueCount
+                _ = viewModel.unseenIssueIDs.count // track unseenIDs changes too
+            } onChange: { [weak self] in
+                Task { @MainActor in
+                    self?.updateBadge(count: viewModel.totalActiveIssueCount)
+                    if viewModel.unseenIssueIDs.count > 0 {
+                        self?.animateNewErrors(viewModel: viewModel)
+                    }
+                    // Re-arm the observation for the next change
+                    self?.observeBadgeChanges(viewModel: viewModel)
                 }
             }
+            // Apply the initial values captured above
+            self.updateBadge(count: count)
         }
     }
 

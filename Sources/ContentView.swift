@@ -251,7 +251,7 @@ struct MenuBarPopoverView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if !viewModel.issues.filter({ !$0.isIgnored }).isEmpty {
+                    if !viewModel.issues.isEmpty {
                         let sc = viewModel.spellingCount
                         let gc = viewModel.grammarCount
                         HStack(spacing: 4) {
@@ -284,6 +284,16 @@ struct MenuBarPopoverView: View {
                     }
                 )
                     .frame(height: min(max(CGFloat(viewModel.text.count) / 4 + 48, 56), 110))
+                    .overlay(alignment: .topLeading) {
+                        if viewModel.text.isEmpty {
+                            Text("Type anywhere — WriteAssist captures as you write…")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 10)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -300,7 +310,7 @@ struct MenuBarPopoverView: View {
                 categoryChip(label: "All", category: nil, count: viewModel.totalActiveIssueCount)
 
                 ForEach(IssueCategory.allCases, id: \.self) { category in
-                    let count = viewModel.issues.filter { !$0.isIgnored && $0.type.category == category }.count
+                    let count = viewModel.issues.filter { $0.type.category == category }.count
                     if count > 0 {
                         categoryChip(label: category.rawValue, category: category, count: count)
                     }
@@ -1082,6 +1092,26 @@ struct SettingsPanel: View {
 
     private var cloudSettingsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // Model name field
+            HStack(spacing: 6) {
+                Text("Model")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+                let modelBinding = aiService.provider == .anthropic
+                    ? Binding(
+                        get: { PreferencesManager.shared.anthropicModelName },
+                        set: { PreferencesManager.shared.anthropicModelName = $0 }
+                    )
+                    : Binding(
+                        get: { PreferencesManager.shared.openAIModelName },
+                        set: { PreferencesManager.shared.openAIModelName = $0 }
+                    )
+                TextField("Model name", text: modelBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+            }
+
             HStack(spacing: 6) {
                 SecureField("API Key", text: $apiKeyInput)
                     .textFieldStyle(.roundedBorder)
@@ -1602,6 +1632,7 @@ struct TextSelectionSuggestionsPanel: View {
                 // Create a synthetic issue for the selected text
                 let issue = WritingIssue(
                     type: .style,
+                    ruleID: "formality",
                     range: NSRange(location: 0, length: selectedText.count),
                     word: String(selectedText.prefix(20)),
                     message: "Improve this selection",

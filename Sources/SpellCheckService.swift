@@ -116,6 +116,7 @@ enum SpellCheckService {
                 ) ?? []
                 issues.append(WritingIssue(
                     type: .spelling,
+                    ruleID: "spelling",
                     range: result.range,
                     word: word,
                     message: "Misspelled word",
@@ -146,6 +147,7 @@ enum SpellCheckService {
                         if !overlapsSpelling {
                             issues.append(WritingIssue(
                                 type: .grammar,
+                                ruleID: "grammar",
                                 range: detailRange,
                                 word: word,
                                 message: description,

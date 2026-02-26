@@ -16,8 +16,8 @@ struct WritingSession: Codable, Identifiable, Sendable {
 
 @MainActor
 @Observable
-final class WritingStatsStore: @unchecked Sendable {
-    static let shared = WritingStatsStore()
+public final class WritingStatsStore: @unchecked Sendable {
+    public static let shared = WritingStatsStore()
 
     private(set) var sessions: [WritingSession] = []
     private let storageKey = "writingSessions"
@@ -49,7 +49,7 @@ final class WritingStatsStore: @unchecked Sendable {
         currentSessionCorrections += 1
     }
 
-    func endSession() {
+    public func endSession() {
         guard currentSessionWordCount > 0 else { return }
         let session = WritingSession(
             id: UUID(),

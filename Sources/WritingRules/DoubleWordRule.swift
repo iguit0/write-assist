@@ -27,6 +27,7 @@ struct DoubleWordRule: WritingRule {
 
             return WritingIssue(
                 type: .doubleWord,
+                ruleID: ruleID,
                 range: match.range,
                 word: duplicated,
                 message: "Repeated word: \"\(singleWord)\"",

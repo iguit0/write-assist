@@ -359,45 +359,14 @@ final class SelectionSuggestionPanel {
         }
     }
 
-    // MARK: - Positioning (mirrors ErrorHUDPanel)
+    // MARK: - Positioning (delegates to PanelPositioning — #021)
 
     private static func caretAnchoredOrigin(caretBounds: CGRect, panelSize: NSSize) -> NSPoint {
-        // AX uses top-left origin; AppKit uses bottom-left origin.
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 900
-
-        let caretTopAppKit = primaryHeight - caretBounds.minY
-        let caretBottomAppKit = primaryHeight - caretBounds.maxY
-        let caretX = caretBounds.origin.x
-
-        let caretCenter = NSPoint(
-            x: caretX + caretBounds.width / 2,
-            y: (caretTopAppKit + caretBottomAppKit) / 2
-        )
-        let screen = NSScreen.screens.first { $0.frame.contains(caretCenter) }
-        let visibleFrame = screen?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        let gap: CGFloat = 6
-
-        var y = caretBottomAppKit - gap - panelSize.height
-        if y < visibleFrame.minY {
-            y = caretTopAppKit + gap
-        }
-
-        var x = caretX
-        x = max(visibleFrame.minX + 8, min(x, visibleFrame.maxX - panelSize.width - 8))
-        y = max(visibleFrame.minY, min(y, visibleFrame.maxY - panelSize.height))
-
-        return NSPoint(x: x, y: y)
+        PanelPositioning.origin(caretBounds: caretBounds, panelSize: panelSize, gap: 6)
     }
 
     private static func topRightFallbackOrigin(panelSize: NSSize) -> NSPoint {
-        let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        return NSPoint(
-            x: frame.maxX - panelSize.width - 16,
-            y: frame.maxY - panelSize.height - 8
-        )
+        PanelPositioning.topRightFallback(panelSize: panelSize)
     }
 
     private static func queryCaretBoundsAsync() async -> CGRect? {
@@ -408,37 +377,8 @@ final class SelectionSuggestionPanel {
         }
     }
 
+    /// Delegates to `AXHelper.caretBounds()` (#020).
     private nonisolated static func queryCaretBoundsSync() -> CGRect? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        ) == .success,
-              let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else { return nil }
-
-        let element = focusedRef as! AXUIElement
-
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            &rangeRef
-        ) == .success, let rangeRef else { return nil }
-
-        var boundsRef: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(
-            element,
-            kAXBoundsForRangeParameterizedAttribute as CFString,
-            rangeRef,
-            &boundsRef
-        ) == .success, let boundsRef else { return nil }
-
-        var rect = CGRect.zero
-        guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect) else { return nil }
-        return rect
+        AXHelper.caretBounds()
     }
 }

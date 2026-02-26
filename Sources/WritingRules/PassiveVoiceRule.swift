@@ -137,6 +137,7 @@ struct PassiveVoiceRule: WritingRule {
 
         return WritingIssue(
             type: .passiveVoice,
+            ruleID: ruleID,
             range: nsRange,
             word: phrase,
             message: "Passive voice — consider using active voice",

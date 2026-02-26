@@ -71,6 +71,14 @@ final class PreferencesManager: @unchecked Sendable {
         }
     }
 
+    // AI model names — user-selectable per provider
+    var anthropicModelName: String {
+        didSet { UserDefaults.standard.set(anthropicModelName, forKey: "anthropicModelName") }
+    }
+    var openAIModelName: String {
+        didSet { UserDefaults.standard.set(openAIModelName, forKey: "openAIModelName") }
+    }
+
     // Rule toggles — keyed by ruleID
     var disabledRules: Set<String> {
         didSet {
@@ -96,5 +104,7 @@ final class PreferencesManager: @unchecked Sendable {
         self.audienceLevel = AudienceLevel(rawValue: defaults.string(forKey: "audienceLevel") ?? "") ?? .general
         self.writingPreset = WritingPreset(rawValue: defaults.string(forKey: "writingPreset") ?? "") ?? .email
         self.disabledRules = Set(defaults.stringArray(forKey: "disabledRules") ?? [])
+        self.anthropicModelName = defaults.string(forKey: "anthropicModelName") ?? "claude-sonnet-4-20250514"
+        self.openAIModelName = defaults.string(forKey: "openAIModelName") ?? "gpt-4o-mini"
     }
 }

@@ -10,11 +10,11 @@ private let logger = Logger(subsystem: "com.writeassist", category: "GlobalInput
 /// accumulated text into the shared `DocumentViewModel`.
 @MainActor
 @Observable
-final class GlobalInputMonitor {
+public final class GlobalInputMonitor {
 
     // MARK: - Observable State
 
-    private(set) var hasAccessibilityPermission = false
+    public private(set) var hasAccessibilityPermission = false
 
     // MARK: - Private State
 
@@ -46,7 +46,7 @@ final class GlobalInputMonitor {
 
     // MARK: - Init
 
-    init(viewModel: DocumentViewModel) {
+    public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
         checkPermission()
         startPermissionPolling()
@@ -55,7 +55,7 @@ final class GlobalInputMonitor {
     /// Invalidates the permission polling timer. Call before releasing this object.
     /// Marked `@MainActor` to allow direct synchronous access to the timer.
     @MainActor
-    func cleanup() {
+    public func cleanup() {
         permissionTimer?.invalidate()
         permissionTimer = nil
     }
@@ -97,7 +97,7 @@ final class GlobalInputMonitor {
 
     // MARK: - Monitoring
 
-    func startMonitoring() {
+    public func startMonitoring() {
         guard AXIsProcessTrusted(), monitor == nil else { return }
 
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -107,7 +107,7 @@ final class GlobalInputMonitor {
         }
     }
 
-    func stopMonitoring() {
+    public func stopMonitoring() {
         if let existingMonitor = monitor {
             NSEvent.removeMonitor(existingMonitor)
         }

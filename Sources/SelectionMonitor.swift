@@ -112,66 +112,24 @@ final class SelectionMonitor {
         onSelectionChanged?(text, range, bounds)
     }
 
-    // MARK: - AX Read (background, nonisolated)
+    // MARK: - AX Read (background, nonisolated) — uses AXHelper (#020)
 
     private nonisolated static func readSelection() -> (String, NSRange, CGRect)? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        ) == .success,
-              let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else { return nil }
+        // Skip elements belonging to this process (WriteAssist's own popover).
+        guard let element = AXHelper.focusedElement(skipSelf: true) else { return nil }
 
-        let element = focusedRef as! AXUIElement // safe: type ID verified above
+        // Read selected text.
+        guard let text = AXHelper.selectedText(of: element) else { return nil }
 
-        // Skip selections inside WriteAssist itself (e.g., the popover's HighlightedTextView)
-        // to prevent the system-wide panel from appearing over WriteAssist's own UI.
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        if pid == ProcessInfo.processInfo.processIdentifier { return nil }
-
-        // Read the selected text string.
-        var textRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            &textRef
-        ) == .success,
-              let textRef,
-              let text = textRef as? String,
-              !text.isEmpty
-        else { return nil }
-
-        // Read the selected range.
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            &rangeRef
-        ) == .success, let rangeRef else { return nil }
+        // Read selected range as AXValue.
+        guard let rangeRef = AXHelper.selectedRangeRef(of: element) else { return nil }
 
         var cfRange = CFRange(location: 0, length: 0)
-        // Safe to force-cast: kAXSelectedTextRangeAttribute always returns an AXValue.
         guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &cfRange) else { return nil }
         let nsRange = NSRange(location: cfRange.location, length: cfRange.length)
 
         // Read screen bounds for panel positioning (best-effort; use .zero on failure).
-        var boundsRef: CFTypeRef?
-        var bounds = CGRect.zero
-        if AXUIElementCopyParameterizedAttributeValue(
-            element,
-            kAXBoundsForRangeParameterizedAttribute as CFString,
-            rangeRef,
-            &boundsRef
-        ) == .success,
-           let boundsRef {
-            // Safe to force-cast: kAXBoundsForRangeParameterizedAttribute returns AXValue.
-            AXValueGetValue(boundsRef as! AXValue, .cgRect, &bounds)
-        }
+        let bounds = AXHelper.bounds(for: rangeRef, in: element) ?? .zero
 
         return (text, nsRange, bounds)
     }

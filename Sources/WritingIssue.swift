@@ -110,9 +110,9 @@ enum IssueCategory: String, CaseIterable, Sendable {
 struct WritingIssue: Identifiable, Sendable {
     let id = UUID()
     let type: IssueType
+    let ruleID: String
     let range: NSRange
     let word: String
     let message: String
     let suggestions: [String]
-    var isIgnored: Bool = false
 }

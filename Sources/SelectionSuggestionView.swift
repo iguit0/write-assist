@@ -74,6 +74,7 @@ struct SelectionSuggestionView: View {
                     .background(Circle().fill(Color.primary.opacity(0.07)))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
             .padding(.trailing, 10)
         }
     }
@@ -96,6 +97,9 @@ struct SelectionSuggestionView: View {
                 .foregroundStyle(isActive ? .white : .secondary)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tab.label)
+        .accessibilityHint(tab.descriptionLabel)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
         .animation(.easeInOut(duration: 0.15), value: state.activeTab)
     }
 
@@ -205,6 +209,8 @@ struct SelectionSuggestionView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(state.tabResults[state.activeTab] == nil)
+            .accessibilityLabel("Accept \(state.activeTab.label.lowercased()) rewrite")
+            .accessibilityHint("Replaces your selected text with the AI suggestion")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

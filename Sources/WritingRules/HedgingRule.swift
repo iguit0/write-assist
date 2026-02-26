@@ -7,14 +7,15 @@ struct HedgingRule: WritingRule {
     let ruleID = "hedging"
     let issueType = IssueType.hedging
 
+    /// High-signal hedging phrases — specific constructions that unambiguously weaken writing.
+    /// Flagging these rarely produces false positives.
     private static let hedgingPhrases: [String] = [
-        "i think", "i believe", "i feel", "i guess", "i suppose",
+        "i think", "i believe", "i feel like", "i guess", "i suppose",
         "maybe", "perhaps", "possibly", "probably", "seemingly",
-        "sort of", "kind of", "a little bit", "a bit",
+        "sort of", "kind of", "a little bit",
         "it seems", "it appears", "it might", "it could be",
-        "to some extent", "in some ways", "in a way",
-        "more or less", "fairly", "rather", "somewhat",
-        "just", "basically", "actually", "really",
+        "to some extent", "in some ways",
+        "more or less", "somewhat",
         "tend to", "tends to", "might be", "could be",
         "it is possible that", "there is a chance that",
         "in my opinion", "from my perspective",
@@ -25,6 +26,9 @@ struct HedgingRule: WritingRule {
         "if you ask me", "if i'm not mistaken",
         "i would say", "i would argue", "i would suggest",
     ]
+    // Low-signal filler words removed from active flagging (#032):
+    // "just", "basically", "actually", "really", "fairly", "rather", "a bit",
+    // "i feel", "in a way" — too common in fluent writing to flag without context.
 
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         let lower = text.lowercased()
@@ -52,6 +56,7 @@ struct HedgingRule: WritingRule {
                     let word = nsText.substring(with: nsRange)
                     issues.append(WritingIssue(
                         type: .hedging,
+                        ruleID: ruleID,
                         range: nsRange,
                         word: word,
                         message: "Hedging language weakens your writing",

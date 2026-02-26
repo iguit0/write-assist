@@ -108,6 +108,9 @@ final class ErrorHUDPanel {
         }
         onIgnoreCallback = { [weak self, weak viewModel] in
             logger.debug("onIgnore: user ignored '\(issue.word, privacy: .sensitive)'")
+            // Persist the ignore rule so it survives across sessions (#009).
+            // Session-only removal is also applied via ignoreIssue().
+            IgnoreRulesStore.shared.addRule(word: issue.word, ruleID: issue.ruleID)
             viewModel?.ignoreIssue(issue)
             self?.dismiss()
         }
@@ -330,53 +333,14 @@ final class ErrorHUDPanel {
     /// - Parameters:
     ///   - caretBounds: Caret rectangle in AX screen coordinates (top-left origin).
     ///   - hudSize: Measured size of the HUD content.
+    /// Delegates to `PanelPositioning.origin(caretBounds:panelSize:gap:)` (#021).
     private static func caretAnchoredOrigin(caretBounds: CGRect, hudSize: NSSize) -> NSPoint {
-        // AX uses top-left origin; AppKit uses bottom-left origin.
-        // Primary screen height is the reference for coordinate conversion.
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 900
-
-        // Convert AX rect edges to AppKit Y coordinates
-        let caretTopAppKit = primaryHeight - caretBounds.minY
-        let caretBottomAppKit = primaryHeight - caretBounds.maxY
-        let caretX = caretBounds.origin.x
-
-        // Find the screen containing the caret center
-        let caretCenter = NSPoint(
-            x: caretX + caretBounds.width / 2,
-            y: (caretTopAppKit + caretBottomAppKit) / 2
-        )
-        let screen = NSScreen.screens.first { $0.frame.contains(caretCenter) }
-        let visibleFrame = screen?.visibleFrame
-            ?? NSScreen.main?.visibleFrame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
-        let gap: CGFloat = 4
-
-        // Try placing HUD below the caret
-        var y = caretBottomAppKit - gap - hudSize.height
-
-        // If it would go below the visible area, place above the caret instead
-        if y < visibleFrame.minY {
-            y = caretTopAppKit + gap
-        }
-
-        // X: align with caret left edge, clamped to visible area
-        var x = caretX
-        x = max(visibleFrame.minX + 8, min(x, visibleFrame.maxX - hudSize.width - 8))
-
-        // Final Y clamp
-        y = max(visibleFrame.minY, min(y, visibleFrame.maxY - hudSize.height))
-
-        return NSPoint(x: x, y: y)
+        PanelPositioning.origin(caretBounds: caretBounds, panelSize: hudSize)
     }
 
-    /// Fallback: positions the HUD at the top-right corner of the main screen.
+    /// Delegates to `PanelPositioning.topRightFallback(panelSize:)` (#021).
     private static func topRightFallbackOrigin(hudSize: NSSize) -> NSPoint {
-        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        return NSPoint(
-            x: screenFrame.maxX - hudSize.width - 16,
-            y: screenFrame.maxY - hudSize.height - 8
-        )
+        PanelPositioning.topRightFallback(panelSize: hudSize)
     }
 
     // MARK: - Caret Position via Accessibility
@@ -396,50 +360,20 @@ final class ErrorHUDPanel {
     }
 
     /// Returns the screen bounds (AX coordinates: top-left origin) of the text
-    /// caret in the currently focused UI element. Returns nil on failure.
+    /// caret in the currently focused UI element. Delegates to `AXHelper` (#020).
     private nonisolated static func queryCaretBounds() -> CGRect? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        ) == .success,
-              let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
-        else {
+        guard let element = AXHelper.focusedElement() else {
             logger.debug("queryCaretBounds: no focused element")
             return nil
         }
-        let element = focusedRef as! AXUIElement
-
-        // Get the selected text range (caret position)
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            &rangeRef
-        ) == .success, let rangeRef else {
+        guard let rangeRef = AXHelper.selectedRangeRef(of: element) else {
             logger.debug("queryCaretBounds: no selected text range")
             return nil
         }
-
-        // Get screen bounds for the caret range
-        var boundsRef: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(
-            element,
-            kAXBoundsForRangeParameterizedAttribute as CFString,
-            rangeRef,
-            &boundsRef
-        ) == .success, let boundsRef else {
+        guard let rect = AXHelper.bounds(for: rangeRef, in: element) else {
             logger.debug("queryCaretBounds: no bounds for range")
             return nil
         }
-
-        var rect = CGRect.zero
-        // Safe to force-cast: AXValueCreate always returns an AXValue for this attribute
-        guard AXValueGetValue(boundsRef as! AXValue, .cgRect, &rect) else { return nil }
-
         return rect
     }
 }
@@ -549,10 +483,25 @@ private struct InlineSuggestionView: View {
         )
         .shadow(color: .black.opacity(0.22), radius: 14, y: 5)
         .padding(2) // prevent shadow clipping
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(issue.type.categoryLabel) issue: \(issue.message)")
         .onAppear {
             // Register the AI rewrite trigger so ErrorHUDPanel.handleKeyEvent
             // can fire it via keyboard without a direct reference to this view.
             keyboardState.triggerRewrite = { performAIRewrite() }
+            // Announce the HUD to VoiceOver users (#034).
+            if let app = NSApp {
+                NSAccessibility.post(
+                    element: app,
+                    notification: .announcementRequested,
+                    userInfo: [
+                        NSAccessibility.NotificationUserInfoKey.announcement:
+                            "\(issue.type.categoryLabel): \(issue.message)",
+                        NSAccessibility.NotificationUserInfoKey.priority:
+                            NSAccessibilityPriorityLevel.high.rawValue
+                    ]
+                )
+            }
         }
     }
 
@@ -584,6 +533,7 @@ private struct InlineSuggestionView: View {
                     .background(Circle().fill(Color.primary.opacity(0.07)))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss suggestion")
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
@@ -626,6 +576,7 @@ private struct InlineSuggestionView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Apply correction: \(suggestion)")
                     .background(
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.primary.opacity(
@@ -746,6 +697,7 @@ private struct InlineSuggestionView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Add \(issue.word) to personal dictionary")
             }
 
             Spacer()
@@ -761,6 +713,7 @@ private struct InlineSuggestionView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Ignore this \(issue.type.categoryLabel.lowercased()) issue")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)

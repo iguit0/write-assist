@@ -37,6 +37,17 @@ struct HighlightedTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        // Refresh the coordinator's callback so it always holds the latest closure.
+        // Without this, onSelectionChanged captures a stale reference after re-renders.
+        context.coordinator.onSelectionChanged = onSelectionChanged
+        // Skip attributed-string rebuild if text and issues haven't changed.
+        // NSTextStorage triggers a full re-layout on every setAttributedString call,
+        // which is expensive for long documents on every unrelated SwiftUI update.
+        let issueIDs = issues.map(\.id)
+        guard text != context.coordinator.lastText
+                || issueIDs != context.coordinator.lastIssueIDs else { return }
+        context.coordinator.lastText = text
+        context.coordinator.lastIssueIDs = issueIDs
         textView.textStorage?.setAttributedString(buildAttributedString())
     }
     
@@ -45,7 +56,9 @@ struct HighlightedTextView: NSViewRepresentable {
     }
     
     class Coordinator: NSObject, NSTextViewDelegate {
-        let onSelectionChanged: ((String, NSRange) -> Void)?
+        var onSelectionChanged: ((String, NSRange) -> Void)?
+        var lastText: String = ""
+        var lastIssueIDs: [UUID] = []
         
         init(onSelectionChanged: ((String, NSRange) -> Void)? = nil) {
             self.onSelectionChanged = onSelectionChanged
@@ -69,7 +82,7 @@ struct HighlightedTextView: NSViewRepresentable {
         let result = NSMutableAttributedString(string: text, attributes: base)
         let nsString = text as NSString
 
-        for issue in issues where !issue.isIgnored {
+        for issue in issues {
             // Guard against stale ranges when the buffer changes mid-check
             guard issue.range.location != NSNotFound,
                   issue.range.location + issue.range.length <= nsString.length else {

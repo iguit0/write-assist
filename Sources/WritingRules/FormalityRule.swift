@@ -7,43 +7,45 @@ struct FormalityRule: WritingRule {
     let ruleID = "formality"
     let issueType = IssueType.style
 
-    // Formal words to flag in informal mode
-    private static let formalToInformal: [(formal: String, informal: String)] = [
-        ("commence", "start"), ("terminate", "end"), ("utilize", "use"),
-        ("facilitate", "help"), ("endeavor", "try"), ("ascertain", "find out"),
-        ("subsequently", "then"), ("prior to", "before"), ("procure", "get"),
-        ("remuneration", "pay"), ("peruse", "read"), ("ameliorate", "improve"),
-        ("elucidate", "explain"), ("disseminate", "spread"), ("enumerate", "list"),
-        ("expedite", "speed up"), ("in accordance with", "following"),
-        ("at your earliest convenience", "soon"), ("pursuant to", "following"),
-    ]
+    // Codable mirrors for JSON decoding (#022)
+    private struct JSONFormalPair: Decodable {
+        let formal: String
+        let informal: String
+    }
+    private struct JSONInformalPair: Decodable {
+        let informal: String
+        let formal: String
+    }
+    private struct JSONContraction: Decodable {
+        let contraction: String
+        let expansion: String
+    }
+    private struct JSONRoot: Decodable {
+        let formalToInformal: [JSONFormalPair]
+        let informalToFormal: [JSONInformalPair]
+        let contractions: [JSONContraction]
+    }
 
-    // Informal words to flag in formal mode
-    private static let informalToFormal: [(informal: String, formal: String)] = [
-        ("gonna", "going to"), ("wanna", "want to"), ("gotta", "have to"),
-        ("kinda", "kind of"), ("sorta", "sort of"), ("lemme", "let me"),
-        ("gimme", "give me"), ("dunno", "do not know"), ("ain't", "is not"),
-        ("y'all", "you all"), ("cuz", "because"), ("tho", "though"),
-        ("thru", "through"), ("nite", "night"), ("awesome", "excellent"),
-        ("stuff", "materials"), ("a lot", "significantly"), ("lots of", "numerous"),
-        ("tons of", "a great deal of"), ("kids", "children"),
-        ("pretty much", "largely"), ("right away", "immediately"),
-        ("figure out", "determine"), ("nope", "no"), ("yep", "yes"),
-        ("yeah", "yes"), ("lol", ""), ("btw", "by the way"),
-        ("fyi", "for your information"), ("asap", "as soon as possible"),
-    ]
+    private static let jsonRoot: JSONRoot? = {
+        guard let url = Bundle.module.url(forResource: "formality-words", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let root = try? JSONDecoder().decode(JSONRoot.self, from: data)
+        else { return nil }
+        return root
+    }()
 
-    // Contractions to flag in formal mode
-    private static let contractions: [(contraction: String, expansion: String)] = [
-        ("can't", "cannot"), ("won't", "will not"), ("don't", "do not"),
-        ("doesn't", "does not"), ("didn't", "did not"), ("isn't", "is not"),
-        ("aren't", "are not"), ("wasn't", "was not"), ("weren't", "were not"),
-        ("hasn't", "has not"), ("haven't", "have not"), ("hadn't", "had not"),
-        ("shouldn't", "should not"), ("wouldn't", "would not"),
-        ("couldn't", "could not"), ("I'm", "I am"), ("I've", "I have"),
-        ("I'll", "I will"), ("we're", "we are"), ("they're", "they are"),
-        ("you're", "you are"), ("it's", "it is"),
-    ]
+    // Load word lists from Bundle.module JSON; fall back to empty (non-fatal).
+    private static let formalToInformal: [(formal: String, informal: String)] = {
+        jsonRoot?.formalToInformal.map { (formal: $0.formal, informal: $0.informal) } ?? []
+    }()
+
+    private static let informalToFormal: [(informal: String, formal: String)] = {
+        jsonRoot?.informalToFormal.map { (informal: $0.informal, formal: $0.formal) } ?? []
+    }()
+
+    private static let contractions: [(contraction: String, expansion: String)] = {
+        jsonRoot?.contractions.map { (contraction: $0.contraction, expansion: $0.expansion) } ?? []
+    }()
 
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         // Formality level is read from the snapshot stored in NLAnalysis context.
@@ -102,14 +104,27 @@ struct FormalityRule: WritingRule {
             let nsRange = NSRange(range, in: fullText)
             guard nsRange.location + nsRange.length <= nsText.length else { break }
 
-            let word = nsText.substring(with: nsRange)
-            issues.append(WritingIssue(
-                type: .style,
-                range: nsRange,
-                word: word,
-                message: message,
-                suggestions: suggestion.isEmpty ? [] : [suggestion]
-            ))
+            // Word boundary check — avoids matching inside larger words
+            let before = range.lowerBound > lower.startIndex
+                ? lower[lower.index(before: range.lowerBound)]
+                : nil
+            let after = range.upperBound < lower.endIndex
+                ? lower[range.upperBound]
+                : nil
+            let isWordBounded = (before == nil || !before!.isLetter)
+                && (after == nil || !after!.isLetter)
+
+            if isWordBounded {
+                let word = nsText.substring(with: nsRange)
+                issues.append(WritingIssue(
+                    type: .style,
+                    ruleID: ruleID,
+                    range: nsRange,
+                    word: word,
+                    message: message,
+                    suggestions: suggestion.isEmpty ? [] : [suggestion]
+                ))
+            }
 
             searchStart = range.upperBound
         }

@@ -109,14 +109,27 @@ struct RedundancyRule: WritingRule {
                 let nsRange = NSRange(range, in: text)
                 guard nsRange.location + nsRange.length <= nsText.length else { break }
 
-                let word = nsText.substring(with: nsRange)
-                issues.append(WritingIssue(
-                    type: .redundancy,
-                    range: nsRange,
-                    word: word,
-                    message: "Redundant phrase — consider \"\(replacement)\"",
-                    suggestions: [replacement]
-                ))
+                // Word boundary check — avoids matching inside larger words
+                let before = range.lowerBound > lower.startIndex
+                    ? lower[lower.index(before: range.lowerBound)]
+                    : nil
+                let after = range.upperBound < lower.endIndex
+                    ? lower[range.upperBound]
+                    : nil
+                let isWordBounded = (before == nil || !before!.isLetter)
+                    && (after == nil || !after!.isLetter)
+
+                if isWordBounded {
+                    let word = nsText.substring(with: nsRange)
+                    issues.append(WritingIssue(
+                        type: .redundancy,
+                        ruleID: ruleID,
+                        range: nsRange,
+                        word: word,
+                        message: "Redundant phrase — consider \"\(replacement)\"",
+                        suggestions: [replacement]
+                    ))
+                }
 
                 searchStart = range.upperBound
             }

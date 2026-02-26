@@ -13,8 +13,8 @@ private let logger = Logger(subsystem: "com.writeassist", category: "DocumentVie
 /// `Sendable` conformance in Swift 6 strict concurrency mode.
 @MainActor
 @Observable
-final class DocumentViewModel: @unchecked Sendable {
-    var text: String = ""
+public final class DocumentViewModel: @unchecked Sendable {
+    public var text: String = ""
     var issues: [WritingIssue] = []
     var ignoredRanges: Set<String> = []
 
@@ -53,7 +53,9 @@ final class DocumentViewModel: @unchecked Sendable {
     private var isProgrammaticBufferUpdate = false
 
     /// Weak reference to the input monitor so we can update the buffer after correction.
-    weak var inputMonitor: GlobalInputMonitor?
+    public weak var inputMonitor: GlobalInputMonitor?
+
+    public init() {}
 
     /// Cached NL analysis result, updated on each check cycle.
     private(set) var cachedAnalysis: NLAnalysis?
@@ -131,22 +133,42 @@ final class DocumentViewModel: @unchecked Sendable {
 
     // MARK: - Writing Score
 
-    /// Multi-dimensional writing score combining correctness, clarity, engagement, and delivery.
+    /// Multi-dimensional writing score (0–100) combining four dimensions:
+    /// - Correctness: spelling & grammar issues deduct up to 40 points
+    /// - Clarity: passive voice, run-ons, fragments, wordiness deduct up to 25 points
+    /// - Engagement: hedging & redundancy deduct up to 20 points
+    /// - Delivery: style & inclusive language issues deduct up to 15 points
+    /// Score is clamped to [0, 100]. Returns 100 for empty documents.
+    var writingScore: Int {
+        guard wordCount > 0 else { return 100 }
+
+        // Per-issue penalty, scaled by document length to avoid penalising long documents
+        // too harshly. Penalty per issue decreases as the document grows.
+        let scale = max(1.0, Double(wordCount) / 100.0)
+
+        let correctnessPenalty = min(40.0, Double(spellingCount + grammarCount) * 4.0 / scale)
+        let clarityPenalty     = min(25.0, Double(clarityCount) * 3.0 / scale)
+        let engagementPenalty  = min(20.0, Double(engagementCount) * 2.0 / scale)
+        let deliveryPenalty    = min(15.0, Double(styleCount) * 2.0 / scale)
+
+        let score = 100.0 - correctnessPenalty - clarityPenalty - engagementPenalty - deliveryPenalty
+        return max(0, Int(score.rounded()))
+    }
+
     // MARK: - Issue Counts
 
-    var spellingCount: Int { issues.filter { $0.type == .spelling && !$0.isIgnored }.count }
-    var grammarCount: Int { issues.filter { $0.type == .grammar && !$0.isIgnored }.count }
-    var clarityCount: Int { issues.filter { $0.type.category == .clarity && !$0.isIgnored }.count }
-    var styleCount: Int { issues.filter { $0.type.category == .delivery && !$0.isIgnored }.count }
-    var engagementCount: Int { issues.filter { $0.type.category == .engagement && !$0.isIgnored }.count }
+    var spellingCount: Int { issues.filter { $0.type == .spelling }.count }
+    var grammarCount: Int { issues.filter { $0.type == .grammar }.count }
+    var clarityCount: Int { issues.filter { $0.type.category == .clarity }.count }
+    var styleCount: Int { issues.filter { $0.type.category == .delivery }.count }
+    var engagementCount: Int { issues.filter { $0.type.category == .engagement }.count }
 
-    var totalActiveIssueCount: Int { issues.filter { !$0.isIgnored }.count }
+    var totalActiveIssueCount: Int { issues.count }
 
     /// Issues filtered by the currently selected category (nil = all).
     var filteredIssues: [WritingIssue] {
-        let active = issues.filter { !$0.isIgnored }
-        guard let category = selectedCategory else { return active }
-        return active.filter { $0.type.category == category }
+        guard let category = selectedCategory else { return issues }
+        return issues.filter { $0.type.category == category }
     }
 
     // MARK: - Check Scheduling
@@ -284,7 +306,7 @@ final class DocumentViewModel: @unchecked Sendable {
         let ignoreStore = IgnoreRulesStore.shared
         let newIssues = detected.filter {
             !ignoredRanges.contains(ignoredKey(for: $0))
-            && !ignoreStore.isIgnored(word: $0.word, ruleID: $0.type.categoryLabel)
+            && !ignoreStore.isIgnored(word: $0.word, ruleID: $0.ruleID)
         }
 
         // Track which issues are genuinely new (not already in the list by word+range)

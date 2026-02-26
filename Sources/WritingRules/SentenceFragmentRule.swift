@@ -45,6 +45,7 @@ struct SentenceFragmentRule: WritingRule {
 
                 issues.append(WritingIssue(
                     type: .fragment,
+                    ruleID: ruleID,
                     range: nsRange,
                     word: truncated,
                     message: "Sentence fragment — may be missing a verb",

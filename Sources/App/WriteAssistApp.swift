@@ -2,6 +2,7 @@
 // Copyright © 2025 Igor Alves. All rights reserved.
 
 import SwiftUI
+import WriteAssistCore
 
 @main
 struct WriteAssistApp: App {

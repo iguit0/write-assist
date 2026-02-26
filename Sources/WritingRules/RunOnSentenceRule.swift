@@ -21,6 +21,7 @@ struct RunOnSentenceRule: WritingRule {
             let truncated = words.prefix(6).joined(separator: " ") + "..."
             issues.append(WritingIssue(
                 type: .runOn,
+                ruleID: ruleID,
                 range: nsRange,
                 word: truncated,
                 message: "This sentence has \(words.count) words — consider breaking it up",

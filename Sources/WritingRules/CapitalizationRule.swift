@@ -20,6 +20,7 @@ struct CapitalizationRule: WritingRule {
                 let corrected = sentence.prefix(1).uppercased() + sentence.dropFirst()
                 issues.append(WritingIssue(
                     type: .capitalization,
+                    ruleID: ruleID,
                     range: NSRange(location: nsRange.location, length: 1),
                     word: String(firstChar),
                     message: "Sentence should start with a capital letter",
