@@ -175,6 +175,10 @@ public final class DocumentViewModel: @unchecked Sendable {
 
     private var checkTask: Task<Void, Never>?
 
+    /// Stores the pending AX timeout/fallback task so it can be cancelled if the
+    /// AX injection completes before the 1-second deadline fires (#037).
+    private var fallbackTask: Task<Void, Never>?
+
     func textDidChange(_ newText: String) {
         text = newText
         ignoredRanges = []
@@ -392,63 +396,53 @@ public final class DocumentViewModel: @unchecked Sendable {
         isProgrammaticBufferUpdate = false
         logger.debug("applyCorrection: buffer updated, programmatic flag reset")
 
-        // ── Phase 2: AX injection — background thread with 1-second timeout ───
-        //
-        // CRITICAL: We must NEVER block @MainActor with AX C calls.
-        // Strategy: fire background GCD task, return immediately.
-        // If AX succeeds → word replaced in-place in target app, timed fallback cancelled.
-        // If AX fails   → clipboard paste (already set in Phase 1).
-        // If AX hangs   → 1-second deadline fires the paste fallback so the user
-        //                  doesn't wait indefinitely if AX is stuck.
+        // ── Phase 2: AX injection — pure Swift concurrency (#037) ────────────
+        // Replace DispatchWorkItem + DispatchQueue with Task throughout so all
+        // scheduled-main-actor work uses a single concurrency mechanism.
         let word = issue.word
-        let fallbackItem = DispatchWorkItem { [weak self] in
+        fallbackTask?.cancel()
+        fallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
             logger.warning("applyCorrection: AX timed out — firing paste fallback")
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(correction, forType: .string)
             Self.simulatePasteStatic()
             if let prev = previousClipboard {
-                Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prev, forType: .string)
+            }
+            self?.isCorrectionInFlight = false
+            logger.debug("applyCorrection: correctionInFlight cleared (timeout path)")
+        }
+
+        // Detached task captures only String values — no self capture needed (#037)
+        let axTask = Task.detached(priority: .userInitiated) {
+            Self.injectCorrectionViaAXBackground(word: word, correction: correction)
+        }
+        // Result handler runs on @MainActor — safe to capture [weak self] directly
+        Task { @MainActor [weak self] in
+            let axSucceeded = await axTask.value
+            self?.fallbackTask?.cancel()
+            logger.info("applyCorrection: AX injection result = \(axSucceeded)")
+            if !axSucceeded {
+                logger.warning("applyCorrection: AX failed — firing paste fallback")
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(correction, forType: .string)
+                Self.simulatePasteStatic()
+                if let prev = previousClipboard {
                     try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(prev, forType: .string)
                 }
             }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-                logger.debug("applyCorrection: correctionInFlight cleared (timeout path)")
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackItem)
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            logger.debug("applyCorrection: AX injection starting on background thread")
-            let axSucceeded = Self.injectCorrectionViaAXBackground(
-                word: word, correction: correction
-            )
-            logger.info("applyCorrection: AX injection result = \(axSucceeded)")
-            // Cancel the timed fallback — we'll handle it ourselves
-            fallbackItem.cancel()
-            if !axSucceeded {
-                logger.warning("applyCorrection: AX failed — firing paste fallback")
-                DispatchQueue.main.async {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(correction, forType: .string)
-                    Self.simulatePasteStatic()
-                    if let prev = previousClipboard {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(300))
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(prev, forType: .string)
-                        }
-                    }
-                }
-            }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-                logger.debug("applyCorrection: correctionInFlight cleared (normal path)")
-            }
+            self?.isCorrectionInFlight = false
+            logger.debug("applyCorrection: correctionInFlight cleared (normal path)")
         }
         logger.debug("applyCorrection: Phase 1 complete, background AX dispatched [END sync]")
     }
@@ -481,53 +475,49 @@ public final class DocumentViewModel: @unchecked Sendable {
         let trigger = snippet.trigger
         let expansion = snippet.expansion
 
-        let fallbackItem = DispatchWorkItem { [weak self] in
+        // AX injection — pure Swift concurrency (#037)
+        fallbackTask?.cancel()
+        fallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
             logger.warning("applySnippet: AX timed out — firing paste fallback")
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(expansion, forType: .string)
             Self.simulatePasteStatic()
             if let prev = previousClipboard {
-                Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prev, forType: .string)
+            }
+            self?.isCorrectionInFlight = false
+            logger.debug("applySnippet: correctionInFlight cleared (timeout path)")
+        }
+
+        // Detached task captures only String values — no self capture needed (#037)
+        let axTask = Task.detached(priority: .userInitiated) {
+            Self.injectCorrectionViaAXBackground(word: trigger, correction: expansion)
+        }
+        Task { @MainActor [weak self] in
+            let axSucceeded = await axTask.value
+            self?.fallbackTask?.cancel()
+            logger.info("applySnippet: AX injection result = \(axSucceeded)")
+            if !axSucceeded {
+                logger.warning("applySnippet: AX failed — firing paste fallback")
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(expansion, forType: .string)
+                Self.simulatePasteStatic()
+                if let prev = previousClipboard {
                     try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(prev, forType: .string)
                 }
             }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-                logger.debug("applySnippet: correctionInFlight cleared (timeout path)")
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackItem)
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            logger.debug("applySnippet: AX injection starting on background thread")
-            let axSucceeded = Self.injectCorrectionViaAXBackground(
-                word: trigger, correction: expansion
-            )
-            logger.info("applySnippet: AX injection result = \(axSucceeded)")
-            fallbackItem.cancel()
-            if !axSucceeded {
-                logger.warning("applySnippet: AX failed — firing paste fallback")
-                DispatchQueue.main.async {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(expansion, forType: .string)
-                    Self.simulatePasteStatic()
-                    if let prev = previousClipboard {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(300))
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(prev, forType: .string)
-                        }
-                    }
-                }
-            }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-                logger.debug("applySnippet: correctionInFlight cleared (normal path)")
-            }
+            self?.isCorrectionInFlight = false
+            logger.debug("applySnippet: correctionInFlight cleared (normal path)")
         }
         logger.debug("applySnippet: Phase 1 complete, background AX dispatched [END sync]")
     }
@@ -636,48 +626,47 @@ public final class DocumentViewModel: @unchecked Sendable {
         // Save existing clipboard content so we can restore it if the paste fallback fires.
         let previousClipboard = NSPasteboard.general.string(forType: .string)
 
-        let fallbackItem = DispatchWorkItem { [weak self] in
+        // AX injection — pure Swift concurrency (#037)
+        fallbackTask?.cancel()
+        fallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
             logger.warning("replaceSelection: AX timed out — firing paste fallback")
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(replacement, forType: .string)
             Self.simulatePasteStatic()
             if let prev = previousClipboard {
-                Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prev, forType: .string)
+            }
+            self?.isCorrectionInFlight = false
+        }
+
+        // Detached task captures only String values — no self capture needed (#037)
+        let axTask = Task.detached(priority: .userInitiated) {
+            Self.injectSelectedTextViaAXBackground(replacement: replacement)
+        }
+        Task { @MainActor [weak self] in
+            let axSucceeded = await axTask.value
+            self?.fallbackTask?.cancel()
+            if !axSucceeded {
+                logger.warning("replaceSelection: AX failed — firing paste fallback")
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(replacement, forType: .string)
+                Self.simulatePasteStatic()
+                if let prev = previousClipboard {
                     try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(prev, forType: .string)
                 }
             }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackItem)
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let axSucceeded = Self.injectSelectedTextViaAXBackground(replacement: replacement)
-            fallbackItem.cancel()
-            if !axSucceeded {
-                logger.warning("replaceSelection: AX failed — firing paste fallback")
-                DispatchQueue.main.async {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(replacement, forType: .string)
-                    Self.simulatePasteStatic()
-                    if let prev = previousClipboard {
-                        Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(300))
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(prev, forType: .string)
-                        }
-                    }
-                }
-            }
-            Task { @MainActor in
-                self?.isCorrectionInFlight = false
-                logger.debug("replaceSelection: correctionInFlight cleared")
-            }
+            self?.isCorrectionInFlight = false
+            logger.debug("replaceSelection: correctionInFlight cleared")
         }
     }
 

@@ -1,7 +1,7 @@
 # `applyCorrection` mixes GCD `DispatchWorkItem` and Swift `Task` inconsistently
 
 **Labels:** `refactor` `P3-low`  
-**Status:** 🆕 New
+**Status:** ✅ Fixed — replaced all `DispatchWorkItem` + `DispatchQueue.main.asyncAfter` and `DispatchQueue.global().async` in `applyCorrection`, `applySnippet`, and `replaceSelection` with `Task { @MainActor }` and `Task.detached`; added a `fallbackTask` property for structured cancellation (#037)
 
 ## Description
 

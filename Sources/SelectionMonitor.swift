@@ -26,6 +26,14 @@ final class SelectionMonitor {
 
     private var pollingTask: Task<Void, Never>?
 
+    /// Set to false when the screensaver starts or the Mac sleeps, to skip
+    /// AX polls while the display is inactive and avoid unnecessary battery drain (#038).
+    private var isScreenActive = true
+
+    /// Opaque observer tokens from `NSWorkspace.notificationCenter`.
+    /// Held so they can be removed when the monitor stops.
+    private var workspaceObservers: [AnyObject] = []
+
     // MARK: - Thresholds
 
     private let minCharCount = 15
@@ -42,9 +50,13 @@ final class SelectionMonitor {
             return
         }
         guard pollingTask == nil else { return }
+        registerScreenObservers()
         pollingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                await self?.poll()
+                // Skip polls while the screen is off to avoid unnecessary AX calls (#038)
+                if self?.isScreenActive == true {
+                    await self?.poll()
+                }
                 do {
                     try await Task.sleep(for: .milliseconds(250))
                 } catch {
@@ -59,7 +71,49 @@ final class SelectionMonitor {
         pollingTask?.cancel()
         pollingTask = nil
         lastSelectionKey = ""
+        for token in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        workspaceObservers.removeAll()
         logger.debug("SelectionMonitor: stopped")
+    }
+
+    // MARK: - Screen-state observers
+
+    /// Registers NSWorkspace notifications for system sleep and wake events
+    /// so the polling loop can be paused when the Mac is sleeping (#038).
+    /// Note: screensaver-specific notifications require DistributedNotificationCenter
+    /// and are not included here; system sleep covers the primary battery-drain case.
+    private func registerScreenObservers() {
+        guard workspaceObservers.isEmpty else { return }
+        let nc = NSWorkspace.shared.notificationCenter
+
+        let sleepNames: [NSNotification.Name] = [
+            NSWorkspace.willSleepNotification
+        ]
+        let wakeNames: [NSNotification.Name] = [
+            NSWorkspace.didWakeNotification
+        ]
+
+        for name in sleepNames {
+            let token = nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.isScreenActive = false
+                    logger.debug("SelectionMonitor: system sleeping — AX polling paused")
+                }
+            }
+            workspaceObservers.append(token)
+        }
+
+        for name in wakeNames {
+            let token = nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.isScreenActive = true
+                    logger.debug("SelectionMonitor: system awake — AX polling resumed")
+                }
+            }
+            workspaceObservers.append(token)
+        }
     }
 
     // MARK: - Polling

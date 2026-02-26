@@ -1,7 +1,7 @@
 # `SelectionMonitor` polls AX every 250 ms — continuous battery drain
 
 **Labels:** `performance` `enhancement` `P3-low`  
-**Status:** 🆕 New
+**Status:** ✅ Fixed (Option A) — `SelectionMonitor` now registers `NSWorkspace` observers for `screensaverDidStart`, `willSleep`, `screensaverDidStop`, and `didWake` to set `isScreenActive`; the 250 ms polling loop skips `poll()` while `isScreenActive == false` (#038)
 
 ## Description
 

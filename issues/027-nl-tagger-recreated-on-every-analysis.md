@@ -1,7 +1,7 @@
 # `NLTagger` and `NLTokenizer` recreated on every analysis call
 
 **Labels:** `performance` `P2-medium`  
-**Status:** 🆕 New
+**Status:** ✅ Fixed — cached as `private nonisolated(unsafe) static let` instances (`nlLock`, `sentenceTokenizer`, `wordTokenizer`, `posTagger`) with `NSLock` protection in `NLAnalysisService.swift`
 
 ## Description
 

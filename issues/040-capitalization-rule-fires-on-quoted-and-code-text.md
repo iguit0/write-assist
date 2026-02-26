@@ -1,7 +1,7 @@
 # `CapitalizationRule` false-positives on code snippets, quoted text, and brand names
 
 **Labels:** `bug` `ux` `P3-low`  
-**Status:** 🆕 New
+**Status:** ✅ Fixed — `CapitalizationRule` now suppresses false-positives via three heuristics: (1) skip single-character tokens, (2) skip words containing code-indicator chars (`/ . _ ( ) =`) or starting with `~`, (3) skip known lowercase-start Apple brand names (`macOS`, `iOS`, etc.) (#040)
 
 ## Description
 
