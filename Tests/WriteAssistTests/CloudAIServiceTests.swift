@@ -102,3 +102,14 @@ struct ParseSpellCheckResponseTests {
         #expect(issues.isEmpty)
     }
 }
+
+// MARK: - CloudAIPinning
+
+@Suite("CloudAIPinning")
+struct CloudAIPinningTests {
+    @Test("sha256Base64 matches expected digest")
+    func sha256Base64MatchesExpectedDigest() {
+        let data = Data("pin".utf8)
+        #expect(CloudAIPinning.sha256Base64(data) == "ZPRqdSahhtI0ZVJFOuR4ylEkRnT1shuhUL1IOzn3yBI=")
+    }
+}

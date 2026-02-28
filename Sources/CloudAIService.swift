@@ -3,8 +3,79 @@
 
 import Foundation
 import os
+import CryptoKit
+import Security
 
 private let logger = Logger(subsystem: "com.writeassist", category: "CloudAIService")
+
+// MARK: - Certificate Pinning
+
+enum CloudAIPinning {
+    // SHA-256 hashes of DER certificates captured on 2026-02-28.
+    // Update these when the providers rotate certificates.
+    static let pinnedCertHashesByHost: [String: Set<String>] = [
+        "api.anthropic.com": [
+            "ag6U03c8d2TIMhlbw83JBSpm/w+w995FTHSEFZxodUM=",
+            "HfwWBfutNY2LyET3bRUgP6ycpcGnn9SFf/ryhk++v5Y=",
+            "drJ7gKWAJ9w88dpo2sFwEO2TmX0LYD4vrb6FASSTtac="
+        ],
+        "api.openai.com": [
+            "MTT3iMNd/hdV+cjk4RNRQGblaAO62j2l6XFVcxSqIys=",
+            "HfwWBfutNY2LyET3bRUgP6ycpcGnn9SFf/ryhk++v5Y=",
+            "drJ7gKWAJ9w88dpo2sFwEO2TmX0LYD4vrb6FASSTtac="
+        ]
+    ]
+
+    static func sha256Base64(_ data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        return Data(digest).base64EncodedString()
+    }
+
+    static func trustMatchesPins(host: String, trust: SecTrust) -> Bool {
+        guard let pins = pinnedCertHashesByHost[host] else { return false }
+        var error: CFError?
+        guard SecTrustEvaluateWithError(trust, &error) else { return false }
+
+        let certificateCount = SecTrustGetCertificateCount(trust)
+        guard certificateCount > 0 else { return false }
+
+        for index in 0..<certificateCount {
+            guard let certificate = SecTrustGetCertificateAtIndex(trust, index) else { continue }
+            let data = SecCertificateCopyData(certificate) as Data
+            let hash = sha256Base64(data)
+            if pins.contains(hash) { return true }
+        }
+
+        return false
+    }
+}
+
+private final class CloudAIPinningSessionDelegate: NSObject, URLSessionDelegate {
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        let host = challenge.protectionSpace.host
+        guard CloudAIPinning.pinnedCertHashesByHost[host] != nil else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        if CloudAIPinning.trustMatchesPins(host: host, trust: trust) {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            logger.error("TLS pinning failed for \(host, privacy: .public)")
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+}
 
 enum AIProvider: String, CaseIterable, Sendable, Codable {
     case anthropic = "Anthropic"
@@ -83,6 +154,17 @@ final class CloudAIService: @unchecked Sendable {
     // Rate limiting
     private var lastRequestTime: ContinuousClock.Instant?
     private let minRequestInterval: Duration = .seconds(1)
+
+    private static let pinningDelegate = CloudAIPinningSessionDelegate()
+    private static let pinnedSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 120
+        configuration.waitsForConnectivity = true
+        return URLSession(configuration: configuration, delegate: pinningDelegate, delegateQueue: nil)
+    }()
+
+    private var cloudSession: URLSession { Self.pinnedSession }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -326,7 +408,7 @@ final class CloudAIService: @unchecked Sendable {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await cloudSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudAIError.invalidResponse
         }
@@ -365,7 +447,7 @@ final class CloudAIService: @unchecked Sendable {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await cloudSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudAIError.invalidResponse
         }
@@ -406,7 +488,7 @@ final class CloudAIService: @unchecked Sendable {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await cloudSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudAIError.invalidResponse
         }
@@ -474,7 +556,7 @@ final class CloudAIService: @unchecked Sendable {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await cloudSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudAIError.invalidResponse
         }
