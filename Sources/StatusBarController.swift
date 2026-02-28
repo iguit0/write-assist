@@ -111,6 +111,14 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         }
         monitor.start()
 
+        inputMonitor.onAccessibilityPermissionChanged = { [weak monitor] granted in
+            if granted {
+                monitor?.start()
+            } else {
+                monitor?.stop()
+            }
+        }
+
         // Direct callback: fires from runCheck() as soon as spell-check completes —
         // no polling lag. Shows the HUD for the first issue in the list.
         viewModel.onNewIssuesReadyForHUD = { [weak self] issues in

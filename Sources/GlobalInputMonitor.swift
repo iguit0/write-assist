@@ -37,6 +37,9 @@ public final class GlobalInputMonitor {
     /// a real-time spell check with an 800 ms debounce.
     var onWordBoundaryTyped: (() -> Void)?
 
+    /// Fires when Accessibility permission changes (granted or revoked).
+    var onAccessibilityPermissionChanged: ((Bool) -> Void)?
+
     // MARK: - Polling Timer
 
     private var permissionTimer: Timer?
@@ -67,11 +70,13 @@ public final class GlobalInputMonitor {
         if trusted && !wasPermitted {
             // Permission just granted (or first check succeeds) — start monitoring
             startMonitoring()
+            onAccessibilityPermissionChanged?(true)
         } else if !trusted && wasPermitted {
             // Permission just revoked — stop monitoring and clear buffer
             stopMonitoring()
             buffer.removeAll()
             viewModel?.textDidChange("")
+            onAccessibilityPermissionChanged?(false)
         }
     }
 

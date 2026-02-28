@@ -188,6 +188,13 @@ struct OllamaService: Sendable {
         } catch let urlError as URLError {
             switch urlError.code {
             case .cannotConnectToHost, .cannotFindHost:
+                if let fallbackRequest = makeIPv4FallbackRequest(for: request, baseURL: baseURL) {
+                    do {
+                        return try await session.data(for: fallbackRequest)
+                    } catch {
+                        // Fall through to the standard error mapping below.
+                    }
+                }
                 logger.warning("Ollama server not reachable at \(baseURL.absoluteString)")
                 throw CloudAIError.ollamaNotRunning
             case .timedOut:
@@ -197,5 +204,20 @@ struct OllamaService: Sendable {
                 throw urlError
             }
         }
+    }
+
+    /// If the base URL is localhost, retry with IPv4 (127.0.0.1) to avoid
+    /// IPv6 loopback connection refusals when Ollama only binds to IPv4.
+    private static func makeIPv4FallbackRequest(for request: URLRequest, baseURL: URL) -> URLRequest? {
+        guard baseURL.host == "localhost" else { return nil }
+        guard let originalURL = request.url,
+              var components = URLComponents(url: originalURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.host = "127.0.0.1"
+        guard let fallbackURL = components.url else { return nil }
+        var fallback = request
+        fallback.url = fallbackURL
+        return fallback
     }
 }
