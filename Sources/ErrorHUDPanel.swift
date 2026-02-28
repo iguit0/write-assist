@@ -31,6 +31,9 @@ final class ErrorHUDPanel {
     /// Global key event monitor, active only while the HUD panel is visible.
     private var keyMonitor: Any?
 
+    /// Observer used to dismiss the HUD when the active application changes.
+    private var appSwitchObserver: NSObjectProtocol?
+
     /// Whether the HUD is intercepting keyboard events (panel is shown).
     /// StatusBarController checks this to avoid dismissing on navigation keys.
     private(set) var isAcceptingKeyboardInput = false
@@ -166,6 +169,7 @@ final class ErrorHUDPanel {
             logger.debug("show: presenting panel at (\(origin.x), \(origin.y))")
             self.presentPanel(hostingView: hostingView, size: hudSize, origin: origin)
             self.installKeyMonitor()
+            self.installAppSwitchObserver()
         }
     }
 
@@ -189,6 +193,26 @@ final class ErrorHUDPanel {
             keyMonitor = nil
         }
         isAcceptingKeyboardInput = false
+    }
+
+    private func installAppSwitchObserver() {
+        removeAppSwitchObserver()
+        appSwitchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.dismiss()
+            }
+        }
+    }
+
+    private func removeAppSwitchObserver() {
+        if let observer = appSwitchObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            appSwitchObserver = nil
+        }
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
@@ -267,6 +291,7 @@ final class ErrorHUDPanel {
     /// Fade out and remove the HUD panel.
     func dismiss() {
         removeKeyMonitor()
+        removeAppSwitchObserver()
         onApplyCallback = nil
         onIgnoreCallback = nil
         onDismissCallback = nil
@@ -470,6 +495,7 @@ private struct InlineSuggestionView: View {
             aiRewriteView
             Divider().padding(.horizontal, 8).padding(.top, 4)
             actionButtonsView
+            keyboardHintBar
         }
         .frame(width: 280)
         .fixedSize(horizontal: false, vertical: true)
@@ -485,6 +511,7 @@ private struct InlineSuggestionView: View {
         .padding(2) // prevent shadow clipping
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(issue.type.categoryLabel) issue: \(issue.message)")
+        .accessibilityHint(accessibilityShortcutHint)
         .onAppear {
             // Register the AI rewrite trigger so ErrorHUDPanel.handleKeyEvent
             // can fire it via keyboard without a direct reference to this view.
@@ -577,6 +604,8 @@ private struct InlineSuggestionView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Apply correction: \(suggestion)")
+                    .accessibilityValue(keyboardState.selectedIndex == index ? "Selected" : "")
+                    .accessibilityHint(keyboardState.selectedIndex == index ? "Press Return to apply" : "")
                     .background(
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.primary.opacity(
@@ -630,6 +659,9 @@ private struct InlineSuggestionView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Apply AI rewrite")
+                .accessibilityValue(keyboardState.isAIRewriteSelected ? "Selected" : "")
+                .accessibilityHint(keyboardState.isAIRewriteSelected ? "Press Return to apply" : "")
                 .background(
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.primary.opacity(keyboardState.isAIRewriteSelected ? 0.12 : 0.0))
@@ -674,6 +706,9 @@ private struct InlineSuggestionView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("AI rewrite")
+                .accessibilityValue(keyboardState.isAIRewriteSelected ? "Selected" : "")
+                .accessibilityHint(keyboardState.isAIRewriteSelected ? "Press Return to rewrite" : "")
                 .background(
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color.primary.opacity(keyboardState.isAIRewriteSelected ? 0.12 : 0.0))
@@ -717,6 +752,43 @@ private struct InlineSuggestionView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+    }
+
+    private var keyboardHintBar: some View {
+        Text(keyboardShortcutSummary)
+            .font(.system(size: 9))
+            .foregroundStyle(.quaternary)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Keyboard shortcuts: \(accessibilityShortcutHint)")
+    }
+
+    private var keyboardShortcutSummary: String {
+        var parts = ["↑↓ navigate", "↵ apply", "i ignore", "esc dismiss"]
+        if issue.type == .spelling {
+            parts.append("d add to dict")
+        }
+        if keyboardState.aiAvailable {
+            parts.append("r rewrite")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var accessibilityShortcutHint: String {
+        var parts = [
+            "Use up and down arrow keys to navigate suggestions",
+            "press Return to apply",
+            "press I to ignore",
+            "press Escape to dismiss"
+        ]
+        if issue.type == .spelling {
+            parts.append("press D to add the word to the dictionary")
+        }
+        if keyboardState.aiAvailable {
+            parts.append("press R to trigger the AI rewrite")
+        }
+        return parts.joined(separator: ", ")
     }
 
     // MARK: - Helpers
