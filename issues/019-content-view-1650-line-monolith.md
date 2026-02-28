@@ -22,7 +22,7 @@ Split into per-feature files with focused observation scopes:
 |----------|----------|
 | `IssuesListView.swift` | Issue cards, category filter bar |
 | `IssueCardView.swift` | Individual issue row with correction buttons |
-| `ToolsPanel.swift` | Snippets and Tools tab content |
+| `ToolsPanel.swift` | Dictionary, stats, and Tools tab content |
 | `SettingsPanel.swift` | Settings and Preferences tab content |
 | `ChatPanel.swift` | AI chat interface |
 | `WritingStatsView.swift` | Statistics and readability metrics |

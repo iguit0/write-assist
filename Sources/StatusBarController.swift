@@ -94,12 +94,6 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
             spellChecker?.scheduleCheck()
         }
 
-        // Expand the matched snippet in the focused external application.
-        // Uses the same AX-injection + clipboard-paste fallback as applyCorrection.
-        inputMonitor.onSnippetTriggered = { [weak viewModel] snippet in
-            viewModel?.applySnippet(snippet)
-        }
-
         // Show the selection panel when the user selects ≥ 3 words in any app.
         // Guards: don't show while the sidebar is open, the HUD is in keyboard-nav
         // mode, or a correction is being applied.

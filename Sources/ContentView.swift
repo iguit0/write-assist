@@ -1200,11 +1200,10 @@ struct SettingsPanel: View {
     }
 }
 
-// MARK: - Tools Panel (Dictionary, Snippets, Stats)
+// MARK: - Tools Panel (Dictionary, Stats)
 
 enum ToolsTab: String, CaseIterable {
     case dictionary = "Dictionary"
-    case snippets = "Snippets"
     case stats = "Stats"
 }
 
@@ -1245,8 +1244,6 @@ struct ToolsPanel: View {
             switch selectedTab {
             case .dictionary:
                 DictionaryView()
-            case .snippets:
-                SnippetsView()
             case .stats:
                 StatsView()
             }
@@ -1331,114 +1328,6 @@ struct DictionaryView: View {
         guard !trimmed.isEmpty else { return }
         dictionary.addWord(trimmed)
         newWord = ""
-    }
-}
-
-// MARK: - Snippets View
-
-struct SnippetsView: View {
-    @State private var snippets = SnippetsManager.shared
-    @State private var isAddingSnippet = false
-    @State private var newTrigger = ""
-    @State private var newName = ""
-    @State private var newExpansion = ""
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Add button
-            HStack {
-                Text("\(snippets.snippets.count) snippets")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    withAnimation { isAddingSnippet.toggle() }
-                } label: {
-                    Image(systemName: isAddingSnippet ? "xmark" : "plus")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.blue)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
-            if isAddingSnippet {
-                VStack(spacing: 6) {
-                    TextField("Trigger (e.g., /sig)", text: $newTrigger)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
-                    TextField("Name", text: $newName)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
-                    TextField("Expansion text", text: $newExpansion)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
-                    Button("Add Snippet") {
-                        snippets.addSnippet(trigger: newTrigger, name: newName, expansion: newExpansion)
-                        newTrigger = ""
-                        newName = ""
-                        newExpansion = ""
-                        isAddingSnippet = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(newTrigger.isEmpty || newExpansion.isEmpty)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-                Divider()
-            }
-
-            if snippets.snippets.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer(minLength: 20)
-                    Image(systemName: "text.insert")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.secondary)
-                    Text("No snippets yet")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 20)
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(snippets.snippets) { snippet in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 4) {
-                                        Text(snippet.trigger)
-                                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                            .foregroundStyle(.blue)
-                                        Text(snippet.name)
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Text(snippet.expansion)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Button {
-                                    snippets.removeSnippet(id: snippet.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.red.opacity(0.6))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .frame(maxHeight: 300)
-            }
-        }
     }
 }
 
@@ -1694,5 +1583,3 @@ struct SuggestionButton: View {
         .animation(.easeInOut(duration: 0.15), value: isApplied)
     }
 }
-
-
