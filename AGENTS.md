@@ -51,3 +51,6 @@ This file is the source of truth for contributor/agent behavior in this repo. It
 ## Docs / known issues
 - `docs/plans/` contains recent plans; `issues/` contains active pain points. Prefer aligning new changes to these constraints.
 - If `CLAUDE.md` or `README.md` disagree with code, follow the code.
+
+## Commit
+Always follow conventional commit pattern. Do not commit more than 160 characters.
