@@ -24,6 +24,9 @@ struct HighlightedTextView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 8, height: 6)
         textView.font = NSFont.systemFont(ofSize: 12)
         textView.textColor = NSColor.labelColor
+        if #available(macOS 14.0, *) {
+            textView.placeholderString = "Type or paste your text here…"
+        }
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = false

@@ -26,6 +26,14 @@ public final class DocumentViewModel: @unchecked Sendable {
     /// Receives the array of issues that haven't been shown to the user yet in this typing session.
     var onNewIssuesReadyForHUD: (([WritingIssue]) -> Void)?
 
+    /// Called after a correction is applied so the UI can surface an Undo toast.
+    var onCorrectionApplied: ((WritingIssue, String) -> Void)?
+
+    /// Last AX replacement range for undo (nil if correction used paste fallback).
+    private var lastCorrectionAXRange: CFRange?
+    private var lastCorrectionOriginal: String?
+    private var lastCorrectionReplacement: String?
+
     /// Keys of issues whose HUD has already been shown in the current typing session.
     /// Cleared on every textDidChange from USER typing so the HUD can re-appear
     /// after the user keeps typing. NOT cleared during programmatic buffer updates
@@ -370,6 +378,15 @@ public final class DocumentViewModel: @unchecked Sendable {
     func applyCorrection(_ issue: WritingIssue, correction: String) {
         logger.info("applyCorrection: '\(issue.word, privacy: .sensitive)' → '\(correction, privacy: .sensitive)' [START]")
 
+        var didShowUndoToast = false
+        let showUndoToast = { [weak self] in
+            guard !didShowUndoToast else { return }
+            didShowUndoToast = true
+            self?.lastCorrectionOriginal = issue.word
+            self?.lastCorrectionReplacement = correction
+            self?.onCorrectionApplied?(issue, correction)
+        }
+
         // ── Phase 1: fast @MainActor state updates ────────────────────────────
         isCorrectionInFlight = true
         lastCorrectionTime = .now
@@ -409,6 +426,7 @@ public final class DocumentViewModel: @unchecked Sendable {
             pb.clearContents()
             pb.setString(correction, forType: .string)
             Self.simulatePasteStatic()
+            showUndoToast()
             if let prev = previousClipboard {
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
@@ -421,11 +439,13 @@ public final class DocumentViewModel: @unchecked Sendable {
 
         // Detached task captures only String values — no self capture needed (#037)
         let axTask = Task.detached(priority: .userInitiated) {
-            Self.injectCorrectionViaAXBackground(word: word, correction: correction)
+            Self.injectCorrectionViaAXBackgroundResult(word: word, correction: correction)
         }
         // Result handler runs on @MainActor — safe to capture [weak self] directly
         Task { @MainActor [weak self] in
-            let axSucceeded = await axTask.value
+            let axResult = await axTask.value
+            let axSucceeded = axResult.success
+            self?.lastCorrectionAXRange = axSucceeded ? axResult.replacementRange : nil
             self?.fallbackTask?.cancel()
             logger.info("applyCorrection: AX injection result = \(axSucceeded)")
             if !axSucceeded {
@@ -433,6 +453,69 @@ public final class DocumentViewModel: @unchecked Sendable {
                 let pb = NSPasteboard.general
                 pb.clearContents()
                 pb.setString(correction, forType: .string)
+                Self.simulatePasteStatic()
+                showUndoToast()
+                if let prev = previousClipboard {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prev, forType: .string)
+                }
+            } else {
+                showUndoToast()
+            }
+            self?.isCorrectionInFlight = false
+            logger.debug("applyCorrection: correctionInFlight cleared (normal path)")
+        }
+        logger.debug("applyCorrection: Phase 1 complete, background AX dispatched [END sync]")
+    }
+
+    /// Reverses the last correction by replacing the corrected word with its original form.
+    func undoCorrection(original: String, correction: String) {
+        logger.info("undoCorrection: '\(correction, privacy: .sensitive)' → '\(original, privacy: .sensitive)' [START]")
+
+        isCorrectionInFlight = true
+        lastCorrectionTime = .now
+
+        let previousClipboard = NSPasteboard.general.string(forType: .string)
+
+        isProgrammaticBufferUpdate = true
+        inputMonitor?.replaceInBuffer(old: correction, new: original)
+        isProgrammaticBufferUpdate = false
+
+        let rangeOverride: CFRange? = (lastCorrectionOriginal == original
+            && lastCorrectionReplacement == correction) ? lastCorrectionAXRange : nil
+        lastCorrectionAXRange = nil
+
+        fallbackTask?.cancel()
+        fallbackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            logger.warning("undoCorrection: AX timed out — firing paste fallback")
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(original, forType: .string)
+            Self.simulatePasteStatic()
+            if let prev = previousClipboard {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(prev, forType: .string)
+            }
+            self?.isCorrectionInFlight = false
+        }
+
+        let axTask = Task.detached(priority: .userInitiated) {
+            Self.injectCorrectionViaAXBackground(word: correction, correction: original, rangeOverride: rangeOverride)
+        }
+        Task { @MainActor [weak self] in
+            let axSucceeded = await axTask.value
+            self?.fallbackTask?.cancel()
+            if !axSucceeded {
+                logger.warning("undoCorrection: AX failed — firing paste fallback")
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(original, forType: .string)
                 Self.simulatePasteStatic()
                 if let prev = previousClipboard {
                     try? await Task.sleep(for: .milliseconds(300))
@@ -442,9 +525,8 @@ public final class DocumentViewModel: @unchecked Sendable {
                 }
             }
             self?.isCorrectionInFlight = false
-            logger.debug("applyCorrection: correctionInFlight cleared (normal path)")
+            logger.debug("undoCorrection: correctionInFlight cleared")
         }
-        logger.debug("applyCorrection: Phase 1 complete, background AX dispatched [END sync]")
     }
 
     /// AX-based word replacement — runs on a background thread (nonisolated).
@@ -452,10 +534,15 @@ public final class DocumentViewModel: @unchecked Sendable {
     ///
     /// Marked `nonisolated` and `static` so it can be called from a detached Task
     /// without capturing `self` across actor boundaries.
-    private nonisolated static func injectCorrectionViaAXBackground(
+    private struct AXCorrectionResult {
+        let success: Bool
+        let replacementRange: CFRange?
+    }
+
+    private nonisolated static func injectCorrectionViaAXBackgroundResult(
         word: String,
         correction: String
-    ) -> Bool {
+    ) -> AXCorrectionResult {
         logger.debug("AX-bg: getting focused element")
         let systemWide = AXUIElementCreateSystemWide()
         var focusedValue: CFTypeRef?
@@ -465,12 +552,12 @@ public final class DocumentViewModel: @unchecked Sendable {
             &focusedValue
         ) == .success, let focusedValue else {
             logger.warning("AX-bg: failed to get focused element")
-            return false
+            return AXCorrectionResult(success: false, replacementRange: nil)
         }
         // CF types cannot be checked with `as?` — validate via CFGetTypeID before casting.
         guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
             logger.warning("AX-bg: focused value is not an AXUIElement")
-            return false
+            return AXCorrectionResult(success: false, replacementRange: nil)
         }
         let element = focusedValue as! AXUIElement // safe: type ID verified above
 
@@ -485,22 +572,100 @@ public final class DocumentViewModel: @unchecked Sendable {
         let textValue,
         let fullText = textValue as? String else {
             logger.warning("AX-bg: failed to read text value from focused element")
-            return false
+            return AXCorrectionResult(success: false, replacementRange: nil)
         }
 
         // Find the last occurrence of the misspelled word in the element's text
         // (using the last occurrence because the buffer tracks the tail of the document)
         guard let wordRange = fullText.range(of: word, options: .backwards) else {
             logger.warning("AX-bg: word '\(word, privacy: .sensitive)' not found in element text")
-            return false
+            return AXCorrectionResult(success: false, replacementRange: nil)
         }
         let nsRange = NSRange(wordRange, in: fullText)
 
         // Build CFRange for the AX API
         var cfRange = CFRange(location: nsRange.location, length: nsRange.length)
-        guard let axRange = AXValueCreate(.cfRange, &cfRange) else { return false }
+        guard let axRange = AXValueCreate(.cfRange, &cfRange) else {
+            return AXCorrectionResult(success: false, replacementRange: nil)
+        }
 
         // Select the misspelled word
+        logger.debug("AX-bg: setting selected text range")
+        let setRangeResult = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            axRange
+        )
+        guard setRangeResult == .success else {
+            logger.warning("AX-bg: failed to set selected text range")
+            return AXCorrectionResult(success: false, replacementRange: nil)
+        }
+
+        // Replace selected text with the correction
+        logger.debug("AX-bg: setting selected text (length: \(correction.count))")
+        let setTextResult = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            correction as CFString
+        )
+        logger.debug("AX-bg: set text result = \(setTextResult == .success ? "success" : "failed")")
+        let replacementLength = (correction as NSString).length
+        let replacementRange = CFRange(location: nsRange.location, length: replacementLength)
+        return AXCorrectionResult(success: setTextResult == .success, replacementRange: replacementRange)
+    }
+
+    private nonisolated static func injectCorrectionViaAXBackground(
+        word: String,
+        correction: String,
+        rangeOverride: CFRange?
+    ) -> Bool {
+        logger.debug("AX-bg: getting focused element")
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        ) == .success, let focusedValue else {
+            logger.warning("AX-bg: failed to get focused element")
+            return false
+        }
+        guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            logger.warning("AX-bg: focused value is not an AXUIElement")
+            return false
+        }
+        let element = focusedValue as! AXUIElement
+
+        logger.debug("AX-bg: reading text value")
+        var textValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &textValue
+        ) == .success,
+        let textValue,
+        let fullText = textValue as? String else {
+            logger.warning("AX-bg: failed to read text value from focused element")
+            return false
+        }
+
+        let nsRange: NSRange
+        if let override = rangeOverride,
+           override.location >= 0,
+           override.length >= 0,
+           override.location + override.length <= (fullText as NSString).length {
+            nsRange = NSRange(location: override.location, length: override.length)
+        } else {
+            guard let wordRange = fullText.range(of: word, options: .backwards) else {
+                logger.warning("AX-bg: word '\(word, privacy: .sensitive)' not found in element text")
+                return false
+            }
+            nsRange = NSRange(wordRange, in: fullText)
+        }
+
+        var cfRange = CFRange(location: nsRange.location, length: nsRange.length)
+        guard let axRange = AXValueCreate(.cfRange, &cfRange) else { return false }
+
         logger.debug("AX-bg: setting selected text range")
         let setRangeResult = AXUIElementSetAttributeValue(
             element,
@@ -512,7 +677,6 @@ public final class DocumentViewModel: @unchecked Sendable {
             return false
         }
 
-        // Replace selected text with the correction
         logger.debug("AX-bg: setting selected text (length: \(correction.count))")
         let setTextResult = AXUIElementSetAttributeValue(
             element,

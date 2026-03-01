@@ -314,6 +314,17 @@ final class SelectionSuggestionPanel {
             p.animator().alphaValue = 1
         }
 
+        NSAccessibility.post(
+            element: hostingView,
+            notification: .announcementRequested,
+            userInfo: [
+                NSAccessibility.NotificationUserInfoKey.announcement:
+                    "Rewrite suggestions available. Use the tabs to choose a style, then press Return to apply.",
+                NSAccessibility.NotificationUserInfoKey.priority:
+                    NSAccessibilityPriorityLevel.high.rawValue
+            ]
+        )
+
         installKeyMonitor()
         installAppSwitchObserver()
     }

@@ -9,7 +9,7 @@ struct HedgingRule: WritingRule {
 
     /// High-signal hedging phrases — specific constructions that unambiguously weaken writing.
     /// Flagging these rarely produces false positives.
-    private static let hedgingPhrases: [String] = [
+    private static let highSignalPhrases: [String] = [
         "i think", "i believe", "i feel like", "i guess", "i suppose",
         "maybe", "perhaps", "possibly", "probably", "seemingly",
         "sort of", "kind of", "a little bit",
@@ -26,16 +26,17 @@ struct HedgingRule: WritingRule {
         "if you ask me", "if i'm not mistaken",
         "i would say", "i would argue", "i would suggest",
     ]
-    // Low-signal filler words removed from active flagging (#032):
-    // "just", "basically", "actually", "really", "fairly", "rather", "a bit",
-    // "i feel", "in a way" — too common in fluent writing to flag without context.
+
+    private static let lowSignalPhrases: [String] = [
+        "just", "basically", "actually", "really", "honestly"
+    ]
 
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         let lower = text.lowercased()
         let nsText = text as NSString
         var issues: [WritingIssue] = []
 
-        for phrase in Self.hedgingPhrases {
+        for phrase in Self.highSignalPhrases {
             var searchStart = lower.startIndex
             while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
                 let nsRange = NSRange(range, in: text)
@@ -68,6 +69,87 @@ struct HedgingRule: WritingRule {
             }
         }
 
+        for phrase in Self.lowSignalPhrases {
+            var searchStart = lower.startIndex
+            while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
+                let nsRange = NSRange(range, in: text)
+                guard nsRange.location + nsRange.length <= nsText.length else { break }
+
+                let before = range.lowerBound > lower.startIndex
+                    ? lower[lower.index(before: range.lowerBound)]
+                    : nil
+                let after = range.upperBound < lower.endIndex
+                    ? lower[range.upperBound]
+                    : nil
+
+                let isWordBounded = (before == nil || !before!.isLetter)
+                    && (after == nil || !after!.isLetter)
+
+                if isWordBounded, shouldFlagLowSignal(range: range, lower: lower, nsText: nsText, phrase: phrase) {
+                    let word = nsText.substring(with: nsRange)
+                    issues.append(WritingIssue(
+                        type: .hedging,
+                        ruleID: ruleID,
+                        range: nsRange,
+                        word: word,
+                        message: "Hedging language weakens your writing",
+                        suggestions: []
+                    ))
+                }
+
+                searchStart = range.upperBound
+            }
+        }
+
         return issues
+    }
+
+    private func shouldFlagLowSignal(
+        range: Range<String.Index>,
+        lower: String,
+        nsText: NSString,
+        phrase: String
+    ) -> Bool {
+        if isSentenceStart(range: range, lower: lower) {
+            return true
+        }
+        let nsRange = NSRange(range, in: lower)
+        let paragraphRange = nsText.paragraphRange(for: nsRange)
+        let paragraph = (lower as NSString).substring(with: paragraphRange)
+        return countOccurrencesWordBounded(of: phrase, in: paragraph) > 1
+    }
+
+    private func isSentenceStart(range: Range<String.Index>, lower: String) -> Bool {
+        var index = range.lowerBound
+        while index > lower.startIndex {
+            index = lower.index(before: index)
+            let char = lower[index]
+            if char.isWhitespace {
+                continue
+            }
+            return char == "." || char == "!" || char == "?" || char == "\n"
+        }
+        return true
+    }
+
+    private func countOccurrencesWordBounded(of phrase: String, in text: String) -> Int {
+        let lower = text.lowercased()
+        var count = 0
+        var searchStart = lower.startIndex
+        while let found = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
+            let before = found.lowerBound > lower.startIndex
+                ? lower[lower.index(before: found.lowerBound)]
+                : nil
+            let after = found.upperBound < lower.endIndex
+                ? lower[found.upperBound]
+                : nil
+            let isWordBounded = (before == nil || !before!.isLetter)
+                && (after == nil || !after!.isLetter)
+            if isWordBounded {
+                count += 1
+            }
+            searchStart = found.upperBound
+        }
+        return count
     }
 }

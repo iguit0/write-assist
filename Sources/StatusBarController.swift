@@ -21,6 +21,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
     private var eventMonitor: Any?
     private var hudPanel: ErrorHUDPanel?
     private var selectionPanel: SelectionSuggestionPanel?
+    private var undoToastPanel: UndoToastPanel?
     private var selectionMonitor: SelectionMonitor?
     private var externalSpellChecker: ExternalSpellChecker?
     private var isAnimating = false
@@ -38,6 +39,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         self.viewModel = viewModel
         hudPanel = ErrorHUDPanel()
         selectionPanel = SelectionSuggestionPanel(viewModel: viewModel)
+        undoToastPanel = UndoToastPanel()
 
         // Create the status bar item — use variableLength so the button
         // is always visible even if the image fails to load.
@@ -145,6 +147,13 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
             }
         }
 
+        viewModel.onCorrectionApplied = { [weak self, weak viewModel] issue, correction in
+            guard let self, let viewModel else { return }
+            self.undoToastPanel?.show(original: issue.word, correction: correction) {
+                viewModel.undoCorrection(original: issue.word, correction: correction)
+            }
+        }
+
         // Dismiss the inline popup immediately when the user types (no 500ms lag).
         // Also dismiss the selection suggestion panel on any keystroke, and cancel
         // any pending external spell-check debounce so the clock resets correctly.
@@ -162,6 +171,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
                 }
                 self?.hudPanel?.dismiss()
                 self?.selectionPanel?.dismiss()
+                self?.undoToastPanel?.dismiss()
             }
         }
 

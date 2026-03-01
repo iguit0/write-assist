@@ -286,12 +286,16 @@ struct MenuBarPopoverView: View {
                     .frame(height: min(max(CGFloat(viewModel.text.count) / 4 + 48, 56), 110))
                     .overlay(alignment: .topLeading) {
                         if viewModel.text.isEmpty {
-                            Text("Type anywhere — WriteAssist captures as you write…")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 18)
-                                .padding(.vertical, 10)
-                                .allowsHitTesting(false)
+                            if #available(macOS 14.0, *) {
+                                EmptyView()
+                            } else {
+                                Text("Type or paste your text here…")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 18)
+                                    .padding(.vertical, 10)
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                     .padding(.horizontal, 12)

@@ -45,6 +45,9 @@ struct SelectionSuggestionView: View {
         )
         .shadow(color: .black.opacity(0.22), radius: 14, y: 5)
         .padding(2) // prevents shadow clipping
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Rewrite suggestions")
+        .accessibilityHint("Use the tabs to choose a style, then press Accept to apply")
     }
 
     // MARK: - Tab Bar
@@ -64,6 +67,7 @@ struct SelectionSuggestionView: View {
                 .padding(.vertical, 8)
             }
             .scrollIndicators(.never)
+            .accessibilityLabel("Rewrite styles")
 
             // Dismiss button anchored to the right of the tab row
             Button(action: onDismiss) {
@@ -163,6 +167,9 @@ struct SelectionSuggestionView: View {
                 // which reports zero intrinsicContentSize and breaks fittingSize.
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Suggested rewrite")
+        .accessibilityValue("Original: \(original). Suggestion: \(suggestion)")
     }
 
     private func plainResultView(text: String) -> some View {
@@ -173,6 +180,8 @@ struct SelectionSuggestionView: View {
             // textSelection(.enabled) removed — it wraps Text in an NSScrollView
             // whose intrinsicContentSize is zero, collapsing the panel on resize.
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("Suggested rewrite")
+            .accessibilityValue(text)
     }
 
     private func errorView(message: String) -> some View {

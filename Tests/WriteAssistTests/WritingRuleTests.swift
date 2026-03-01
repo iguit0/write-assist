@@ -140,6 +140,27 @@ struct HedgingRuleTests {
         // "thinking" is not in the hedging phrase list
         #expect(!issues.contains { $0.word.lowercased() == "thinking" })
     }
+
+    @Test("low-signal hedges only flag at sentence start")
+    func lowSignalAtSentenceStart() {
+        let text = "Just checking in about the update."
+        let issues = rule.check(text: text, analysis: analyze(text))
+        #expect(issues.contains { $0.word.lowercased() == "just" })
+    }
+
+    @Test("low-signal hedges ignore single mid-sentence usage")
+    func lowSignalMidSentenceIgnored() {
+        let text = "I just wanted to follow up on this."
+        let issues = rule.check(text: text, analysis: analyze(text))
+        #expect(!issues.contains { $0.word.lowercased() == "just" })
+    }
+
+    @Test("low-signal hedges flag repeated in paragraph")
+    func lowSignalRepeatedInParagraph() {
+        let text = "I just wanted to follow up. It really is just a quick check."
+        let issues = rule.check(text: text, analysis: analyze(text))
+        #expect(issues.filter { $0.word.lowercased() == "just" }.count >= 2)
+    }
 }
 
 // MARK: - ConfusedWordRule
