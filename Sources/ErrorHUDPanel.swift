@@ -216,9 +216,14 @@ final class ErrorHUDPanel {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
-        // Ignore events with command/control/option modifiers
+        // Any modifier shortcut (Cmd/Ctrl/Option) should dismiss the HUD and let
+        // the key pass through to the editor.
         let modifiers = event.modifierFlags.intersection([.command, .control, .option])
-        guard modifiers.isEmpty else { return }
+        guard modifiers.isEmpty else {
+            logger.debug("handleKeyEvent: modifier shortcut — dismissing")
+            dismiss()
+            return
+        }
 
         let keyCode = event.keyCode
 
