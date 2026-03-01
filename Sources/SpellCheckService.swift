@@ -1,7 +1,7 @@
 // WriteAssist — macOS menu bar writing assistant
 // Copyright © 2025 Igor Alves. All rights reserved.
 
-import AppKit
+@preconcurrency import AppKit
 import os
 
 private let logger = Logger(subsystem: "com.writeassist", category: "SpellCheckService")
@@ -13,13 +13,10 @@ enum SpellCheckService {
 
     /// Async spell + grammar check.
     ///
-    /// Uses the synchronous `checkString` API on `@MainActor` instead of the
-    /// callback-based `requestChecking`. In Swift 6, closures created inside
-    /// `DispatchQueue.main.async` inherit `@MainActor` isolation. When the XPC
-    /// service invokes the `requestChecking` callback on a background thread,
-    /// the runtime asserts `dispatch_assert_queue(main_queue)` and crashes.
-    /// The synchronous API avoids this by keeping all NSSpellChecker work on
-    /// the main thread with no cross-isolation callbacks.
+    /// Uses `requestChecking` (async callback API) to avoid blocking the main
+    /// thread while the XPC spell-check service works. The callback is created
+    /// outside `@MainActor` isolation so it can safely fire on a background
+    /// thread without triggering main-queue assertions.
     ///
     /// Falls back to empty results if the check times out.
     static func check(text: String) async -> [WritingIssue] {
@@ -59,30 +56,41 @@ enum SpellCheckService {
 
     // MARK: - Synchronous Spell Check
 
-    /// Runs spell + grammar check synchronously on `@MainActor`.
+    /// Runs spell + grammar check via `requestChecking` (non-blocking).
     ///
-    /// `NSSpellChecker.checkString` dispatches to the XPC spell-check service
-    /// and blocks until results arrive. For the typical buffer sizes in this
-    /// app (≤ 500 characters), the round-trip is < 50 ms. The task-group
-    /// timeout in `check()` still protects against XPC stalls.
-    @MainActor
+    /// NSSpellChecker must stay on the main thread, but the async callback API
+    /// lets us yield while the XPC service works instead of blocking the run loop.
     private static func performCheck(text: String) async -> [WritingIssue] {
-        let checker = NSSpellChecker.shared
         let nsString = text as NSString
         let range = NSRange(location: 0, length: nsString.length)
+        let results = await requestCheckingResults(text: text, range: range)
+        guard !Task.isCancelled else { return [] }
+        return await processResults(results, text: text)
+    }
 
-        let results = checker.check(
-            text,
-            range: range,
-            types: NSTextCheckingResult.CheckingType.spelling.rawValue
-                 | NSTextCheckingResult.CheckingType.grammar.rawValue,
-            options: nil,
-            inSpellDocumentWithTag: 0,
-            orthography: nil,
-            wordCount: nil
-        )
+    private nonisolated static func requestCheckingResults(
+        text: String,
+        range: NSRange
+    ) async -> [NSTextCheckingResult] {
+        await withCheckedContinuation { continuation in
+            let handler: @Sendable (Int, [NSTextCheckingResult], NSOrthography, Int) -> Void = {
+                _, results, _, _ in
+                continuation.resume(returning: results)
+            }
 
-        return processResults(results, text: text)
+            Task { @MainActor in
+                let checker = NSSpellChecker.shared
+                _ = checker.requestChecking(
+                    of: text,
+                    range: range,
+                    types: NSTextCheckingResult.CheckingType.spelling.rawValue
+                         | NSTextCheckingResult.CheckingType.grammar.rawValue,
+                    options: nil,
+                    inSpellDocumentWithTag: 0,
+                    completionHandler: handler
+                )
+            }
+        }
     }
 
     // MARK: - Result Processing
