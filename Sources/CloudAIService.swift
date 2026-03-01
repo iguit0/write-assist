@@ -36,11 +36,10 @@ enum CloudAIPinning {
         var error: CFError?
         guard SecTrustEvaluateWithError(trust, &error) else { return false }
 
-        let certificateCount = SecTrustGetCertificateCount(trust)
-        guard certificateCount > 0 else { return false }
+        let certificates = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? []
+        guard !certificates.isEmpty else { return false }
 
-        for index in 0..<certificateCount {
-            guard let certificate = SecTrustGetCertificateAtIndex(trust, index) else { continue }
+        for certificate in certificates {
             let data = SecCertificateCopyData(certificate) as Data
             let hash = sha256Base64(data)
             if pins.contains(hash) { return true }

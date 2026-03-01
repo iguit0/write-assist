@@ -63,7 +63,7 @@ enum NLAnalysisService {
     // Protected by `nlLock` because NLTokenizer/NLTagger are not thread-safe.
     // In production, DocumentViewModel's 200ms debounce ensures serial access.
     // In tests, the lock prevents concurrent calls from corrupting string indices.
-    private nonisolated(unsafe) static let nlLock = NSLock()
+    private static let nlLock = NSLock()
     private nonisolated(unsafe) static let sentenceTokenizer = NLTokenizer(unit: .sentence)
     private nonisolated(unsafe) static let wordTokenizer = NLTokenizer(unit: .word)
     private nonisolated(unsafe) static let posTagger = NLTagger(tagSchemes: [.lexicalClass])
