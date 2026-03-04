@@ -39,31 +39,21 @@ struct HedgingRule: WritingRule {
         for phrase in Self.highSignalPhrases {
             var searchStart = lower.startIndex
             while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
+                guard isWordBounded(range, in: lower) else {
+                    searchStart = range.upperBound
+                    continue
+                }
                 let nsRange = NSRange(range, in: text)
                 guard nsRange.location + nsRange.length <= nsText.length else { break }
-
-                // Check word boundaries
-                let before = range.lowerBound > lower.startIndex
-                    ? lower[lower.index(before: range.lowerBound)]
-                    : nil
-                let after = range.upperBound < lower.endIndex
-                    ? lower[range.upperBound]
-                    : nil
-
-                let isWordBounded = (before == nil || !before!.isLetter)
-                    && (after == nil || !after!.isLetter)
-
-                if isWordBounded {
-                    let word = nsText.substring(with: nsRange)
-                    issues.append(WritingIssue(
-                        type: .hedging,
-                        ruleID: ruleID,
-                        range: nsRange,
-                        word: word,
-                        message: "Hedging language weakens your writing",
-                        suggestions: []
-                    ))
-                }
+                let word = nsText.substring(with: nsRange)
+                issues.append(WritingIssue(
+                    type: .hedging,
+                    ruleID: ruleID,
+                    range: nsRange,
+                    word: word,
+                    message: "Hedging language weakens your writing",
+                    suggestions: []
+                ))
 
                 searchStart = range.upperBound
             }
@@ -74,28 +64,20 @@ struct HedgingRule: WritingRule {
             while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
                 let nsRange = NSRange(range, in: text)
                 guard nsRange.location + nsRange.length <= nsText.length else { break }
-
-                let before = range.lowerBound > lower.startIndex
-                    ? lower[lower.index(before: range.lowerBound)]
-                    : nil
-                let after = range.upperBound < lower.endIndex
-                    ? lower[range.upperBound]
-                    : nil
-
-                let isWordBounded = (before == nil || !before!.isLetter)
-                    && (after == nil || !after!.isLetter)
-
-                if isWordBounded, shouldFlagLowSignal(range: range, lower: lower, nsText: nsText, phrase: phrase) {
-                    let word = nsText.substring(with: nsRange)
-                    issues.append(WritingIssue(
-                        type: .hedging,
-                        ruleID: ruleID,
-                        range: nsRange,
-                        word: word,
-                        message: "Hedging language weakens your writing",
-                        suggestions: []
-                    ))
+                guard isWordBounded(range, in: lower),
+                      shouldFlagLowSignal(range: range, lower: lower, nsText: nsText, phrase: phrase) else {
+                    searchStart = range.upperBound
+                    continue
                 }
+                let word = nsText.substring(with: nsRange)
+                issues.append(WritingIssue(
+                    type: .hedging,
+                    ruleID: ruleID,
+                    range: nsRange,
+                    word: word,
+                    message: "Hedging language weakens your writing",
+                    suggestions: []
+                ))
 
                 searchStart = range.upperBound
             }
@@ -137,15 +119,7 @@ struct HedgingRule: WritingRule {
         var count = 0
         var searchStart = lower.startIndex
         while let found = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
-            let before = found.lowerBound > lower.startIndex
-                ? lower[lower.index(before: found.lowerBound)]
-                : nil
-            let after = found.upperBound < lower.endIndex
-                ? lower[found.upperBound]
-                : nil
-            let isWordBounded = (before == nil || !before!.isLetter)
-                && (after == nil || !after!.isLetter)
-            if isWordBounded {
+            if isWordBounded(found, in: lower) {
                 count += 1
             }
             searchStart = found.upperBound

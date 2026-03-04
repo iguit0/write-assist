@@ -95,33 +95,24 @@ struct WordinessRule: WritingRule {
         for (phrase, replacement) in Self.wordyPhrases {
             var searchStart = lower.startIndex
             while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
+                guard isWordBounded(range, in: lower) else {
+                    searchStart = range.upperBound
+                    continue
+                }
                 let nsRange = NSRange(range, in: text)
                 guard nsRange.location + nsRange.length <= nsText.length else { break }
-
-                // Word boundary check — avoids matching inside larger words
-                let before = range.lowerBound > lower.startIndex
-                    ? lower[lower.index(before: range.lowerBound)]
-                    : nil
-                let after = range.upperBound < lower.endIndex
-                    ? lower[range.upperBound]
-                    : nil
-                let isWordBounded = (before == nil || !before!.isLetter)
-                    && (after == nil || !after!.isLetter)
-
-                if isWordBounded {
-                    let word = nsText.substring(with: nsRange)
-                    let suggestions = replacement.isEmpty ? [] : [replacement]
-                    issues.append(WritingIssue(
-                        type: .wordiness,
-                        ruleID: ruleID,
-                        range: nsRange,
-                        word: word,
-                        message: replacement.isEmpty
-                            ? "Wordy phrase — consider removing"
-                            : "Wordy phrase — consider \"\(replacement)\"",
-                        suggestions: suggestions
-                    ))
-                }
+                let word = nsText.substring(with: nsRange)
+                let suggestions = replacement.isEmpty ? [] : [replacement]
+                issues.append(WritingIssue(
+                    type: .wordiness,
+                    ruleID: ruleID,
+                    range: nsRange,
+                    word: word,
+                    message: replacement.isEmpty
+                        ? "Wordy phrase — consider removing"
+                        : "Wordy phrase — consider \"\(replacement)\"",
+                    suggestions: suggestions
+                ))
 
                 searchStart = range.upperBound
             }

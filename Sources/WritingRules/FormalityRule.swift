@@ -101,30 +101,21 @@ struct FormalityRule: WritingRule {
     ) {
         var searchStart = lower.startIndex
         while let range = lower.range(of: phrase, range: searchStart..<lower.endIndex) {
+            guard isWordBounded(range, in: lower) else {
+                searchStart = range.upperBound
+                continue
+            }
             let nsRange = NSRange(range, in: fullText)
             guard nsRange.location + nsRange.length <= nsText.length else { break }
-
-            // Word boundary check — avoids matching inside larger words
-            let before = range.lowerBound > lower.startIndex
-                ? lower[lower.index(before: range.lowerBound)]
-                : nil
-            let after = range.upperBound < lower.endIndex
-                ? lower[range.upperBound]
-                : nil
-            let isWordBounded = (before == nil || !before!.isLetter)
-                && (after == nil || !after!.isLetter)
-
-            if isWordBounded {
-                let word = nsText.substring(with: nsRange)
-                issues.append(WritingIssue(
-                    type: .style,
-                    ruleID: ruleID,
-                    range: nsRange,
-                    word: word,
-                    message: message,
-                    suggestions: suggestion.isEmpty ? [] : [suggestion]
-                ))
-            }
+            let word = nsText.substring(with: nsRange)
+            issues.append(WritingIssue(
+                type: .style,
+                ruleID: ruleID,
+                range: nsRange,
+                word: word,
+                message: message,
+                suggestions: suggestion.isEmpty ? [] : [suggestion]
+            ))
 
             searchStart = range.upperBound
         }

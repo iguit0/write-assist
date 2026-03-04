@@ -46,3 +46,21 @@ enum RuleRegistry {
         return issues
     }
 }
+
+// MARK: - Shared Helpers
+
+extension WritingRule {
+    /// Returns true if `range` in `text` is bounded by non-letter characters
+    /// (or is at the start/end of the string). Prevents matching phrases
+    /// inside larger words (e.g., "use" inside "refuse").
+    func isWordBounded(_ range: Range<String.Index>, in text: String) -> Bool {
+        let before: Character? = range.lowerBound > text.startIndex
+            ? text[text.index(before: range.lowerBound)]
+            : nil
+        let after: Character? = range.upperBound < text.endIndex
+            ? text[range.upperBound]
+            : nil
+        return (before == nil || !before!.isLetter)
+            && (after == nil || !after!.isLetter)
+    }
+}

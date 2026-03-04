@@ -33,30 +33,21 @@ struct InclusiveLanguageRule: WritingRule {
         for (term, suggestion) in Self.terms {
             var searchStart = lower.startIndex
             while let range = lower.range(of: term, range: searchStart..<lower.endIndex) {
+                guard isWordBounded(range, in: lower) else {
+                    searchStart = range.upperBound
+                    continue
+                }
                 let nsRange = NSRange(range, in: text)
                 guard nsRange.location + nsRange.length <= nsText.length else { break }
-
-                // Word boundary check
-                let before = range.lowerBound > lower.startIndex
-                    ? lower[lower.index(before: range.lowerBound)]
-                    : nil
-                let after = range.upperBound < lower.endIndex
-                    ? lower[range.upperBound]
-                    : nil
-                let isWordBounded = (before == nil || !before!.isLetter)
-                    && (after == nil || !after!.isLetter)
-
-                if isWordBounded {
-                    let word = nsText.substring(with: nsRange)
-                    issues.append(WritingIssue(
-                        type: .inclusiveLanguage,
-                        ruleID: ruleID,
-                        range: nsRange,
-                        word: word,
-                        message: "Consider more inclusive language — try \"\(suggestion)\"",
-                        suggestions: [suggestion]
-                    ))
-                }
+                let word = nsText.substring(with: nsRange)
+                issues.append(WritingIssue(
+                    type: .inclusiveLanguage,
+                    ruleID: ruleID,
+                    range: nsRange,
+                    word: word,
+                    message: "Consider more inclusive language — try \"\(suggestion)\"",
+                    suggestions: [suggestion]
+                ))
 
                 searchStart = range.upperBound
             }
