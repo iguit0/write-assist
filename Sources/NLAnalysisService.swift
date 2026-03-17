@@ -65,7 +65,6 @@ enum NLAnalysisService {
     // In tests, the lock prevents concurrent calls from corrupting string indices.
     private static let nlLock = NSLock()
     private nonisolated(unsafe) static let sentenceTokenizer = NLTokenizer(unit: .sentence)
-    private nonisolated(unsafe) static let wordTokenizer = NLTokenizer(unit: .word)
     private nonisolated(unsafe) static let posTagger = NLTagger(tagSchemes: [.lexicalClass])
 
     static func analyze(
@@ -74,8 +73,8 @@ enum NLAnalysisService {
         audience: AudienceLevel = .general
     ) -> NLAnalysis {
         let sentenceRanges = tokenizeSentences(text)
-        let words = tokenizeWords(text)
         let posTags = tagPartsOfSpeech(text)
+        let words = posTags.map(\.word)
         let syllables = countSyllables(words: words)
         let frequency = wordFrequency(words: words)
         let tone = detectTone(text: text, words: words, frequency: frequency)
@@ -109,21 +108,6 @@ enum NLAnalysisService {
         tokenizer.string = nil // release reference to avoid holding large strings
         return results
     }
-
-    static func tokenizeWords(_ text: String) -> [String] {
-        nlLock.lock(); defer { nlLock.unlock() }
-        let tokenizer = wordTokenizer
-        tokenizer.string = text
-        var words: [String] = []
-        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
-            words.append(String(text[range]))
-            return true
-        }
-        tokenizer.string = nil
-        return words
-    }
-
-    // MARK: - POS Tagging
 
     static func tagPartsOfSpeech(_ text: String) -> [(word: String, tag: NLTag?, range: Range<String.Index>)] {
         nlLock.lock(); defer { nlLock.unlock() }

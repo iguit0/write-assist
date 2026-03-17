@@ -19,7 +19,7 @@ public final class GlobalInputMonitor {
     // MARK: - Private State
 
     private var monitor: Any?
-    private var buffer: [Character] = []
+    private var buffer = ""
     private let maxBufferSize = 500
     weak var viewModel: DocumentViewModel?
 
@@ -74,7 +74,7 @@ public final class GlobalInputMonitor {
         } else if !trusted && wasPermitted {
             // Permission just revoked — stop monitoring and clear buffer
             stopMonitoring()
-            buffer.removeAll()
+            buffer.removeAll(keepingCapacity: true)
             viewModel?.textDidChange("")
             onAccessibilityPermissionChanged?(false)
         }
@@ -134,20 +134,20 @@ public final class GlobalInputMonitor {
             case 6:  // Cmd+Z — Undo (buffer unreliable after undo)
                 logger.debug("handle: Cmd+Z — clearing buffer (undo)")
                 pendingSelectAll = false
-                buffer.removeAll()
+                buffer.removeAll(keepingCapacity: true)
                 viewModel?.textDidChange("")
             case 7:  // Cmd+X — Cut (removes selected text)
                 if pendingSelectAll {
                     logger.debug("handle: Cmd+X after Select All — clearing buffer")
                     pendingSelectAll = false
-                    buffer.removeAll()
+                    buffer.removeAll(keepingCapacity: true)
                     viewModel?.textDidChange("")
                 }
             case 9:  // Cmd+V — Paste (inserts unknown text)
                 if pendingSelectAll {
                     logger.debug("handle: Cmd+V after Select All — clearing buffer (paste replaces all)")
                     pendingSelectAll = false
-                    buffer.removeAll()
+                    buffer.removeAll(keepingCapacity: true)
                     viewModel?.textDidChange("")
                 }
                 // Note: pasted text won't appear in buffer — next spell check
@@ -174,13 +174,13 @@ public final class GlobalInputMonitor {
             switch keyCode {
             case 51: // Delete after Select All — everything is gone
                 logger.debug("handle: Delete after Select All — clearing buffer")
-                buffer.removeAll()
+                buffer.removeAll(keepingCapacity: true)
                 viewModel?.textDidChange("")
                 return
             default:
                 // Any printable character after Select All replaces everything
                 logger.debug("handle: typing after Select All — clearing buffer, then adding character")
-                buffer.removeAll()
+                buffer.removeAll(keepingCapacity: true)
                 // Fall through to add the typed character below
             }
         }
@@ -199,7 +199,7 @@ public final class GlobalInputMonitor {
         case 36, 76: // Return / Enter
             buffer.append("\n")
         case 53: // Escape — clear buffer
-            buffer.removeAll()
+            buffer.removeAll(keepingCapacity: true)
         case 48: // Tab
             buffer.append("\t")
         default:
@@ -236,21 +236,20 @@ public final class GlobalInputMonitor {
 
         // Trim buffer to max size
         if buffer.count > maxBufferSize {
-            buffer = Array(buffer.suffix(maxBufferSize))
+            buffer = String(buffer.suffix(maxBufferSize))
         }
 
-        let text = String(buffer)
-        viewModel?.textDidChange(text)
+        viewModel?.textDidChange(buffer)
     }
 
     // MARK: - Buffer
 
     var capturedText: String {
-        String(buffer)
+        buffer
     }
 
     func clearBuffer() {
-        buffer.removeAll()
+        buffer.removeAll(keepingCapacity: true)
         viewModel?.textDidChange("")
     }
 
@@ -259,20 +258,18 @@ public final class GlobalInputMonitor {
     /// and subsequent spell checks don't re-detect the already-corrected word.
     func replaceInBuffer(old: String, new: String) {
         logger.debug("replaceInBuffer: old=\(old.count) chars → new=\(new.count) chars")
-        let text = String(buffer)
         // Find the last occurrence of the old word in the current buffer text
-        guard let range = text.range(of: old, options: .backwards) else {
+        guard let range = buffer.range(of: old, options: .backwards) else {
             logger.warning("replaceInBuffer: word (length: \(old.count)) not found in buffer")
             return
         }
-        let corrected = text.replacingCharacters(in: range, with: new)
-        buffer = Array(corrected)
+        buffer.replaceSubrange(range, with: new)
         // Trim to max buffer size if needed
         if buffer.count > maxBufferSize {
-            buffer = Array(buffer.suffix(maxBufferSize))
+            buffer = String(buffer.suffix(maxBufferSize))
         }
         // Notify the view model of the updated text so spell check runs on corrected content
         logger.debug("replaceInBuffer: calling textDidChange (buffer length: \(self.buffer.count))")
-        viewModel?.textDidChange(corrected)
+        viewModel?.textDidChange(buffer)
     }
 }

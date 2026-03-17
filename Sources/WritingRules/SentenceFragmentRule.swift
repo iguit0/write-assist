@@ -2,7 +2,6 @@
 // Copyright © 2025 Igor Alves. All rights reserved.
 
 import Foundation
-import NaturalLanguage
 
 struct SentenceFragmentRule: WritingRule {
     let ruleID = "sentenceFragment"
@@ -12,46 +11,48 @@ struct SentenceFragmentRule: WritingRule {
 
     func check(text: String, analysis: NLAnalysis) -> [WritingIssue] {
         var issues: [WritingIssue] = []
+        let tags = analysis.wordPOSTags
+        var nextTagIndex = 0
 
         for (sentence, sentenceRange) in analysis.sentenceRanges {
-            let wordCount = sentence.split(whereSeparator: { $0.isWhitespace }).count
-            guard wordCount >= Self.minWordsForCheck else { continue }
+            while nextTagIndex < tags.count,
+                  tags[nextTagIndex].range.upperBound <= sentenceRange.lowerBound {
+                nextTagIndex += 1
+            }
 
-            // Tag this individual sentence for POS
-            let tagger = NLTagger(tagSchemes: [.lexicalClass])
-            tagger.string = sentence
+            var wordCount = 0
             var hasVerb = false
-            tagger.enumerateTags(
-                in: sentence.startIndex..<sentence.endIndex,
-                unit: .word,
-                scheme: .lexicalClass,
-                options: [.omitWhitespace, .omitPunctuation]
-            ) { tag, _ in
-                if tag == .verb {
+
+            var tagIndex = nextTagIndex
+            while tagIndex < tags.count,
+                  tags[tagIndex].range.lowerBound < sentenceRange.upperBound {
+                wordCount += 1
+                if tags[tagIndex].tag == .verb {
                     hasVerb = true
-                    return false
                 }
-                return true
+                tagIndex += 1
             }
 
-            if !hasVerb {
-                let nsRange = NSRange(sentenceRange, in: text)
-                let truncated: String
-                if sentence.count > 30 {
-                    truncated = String(sentence.prefix(27)) + "..."
-                } else {
-                    truncated = sentence
-                }
+            nextTagIndex = tagIndex
 
-                issues.append(WritingIssue(
-                    type: .fragment,
-                    ruleID: ruleID,
-                    range: nsRange,
-                    word: truncated,
-                    message: "Sentence fragment — may be missing a verb",
-                    suggestions: []
-                ))
+            guard wordCount >= Self.minWordsForCheck, !hasVerb else { continue }
+
+            let nsRange = NSRange(sentenceRange, in: text)
+            let truncated: String
+            if sentence.count > 30 {
+                truncated = String(sentence.prefix(27)) + "..."
+            } else {
+                truncated = sentence
             }
+
+            issues.append(WritingIssue(
+                type: .fragment,
+                ruleID: ruleID,
+                range: nsRange,
+                word: truncated,
+                message: "Sentence fragment — may be missing a verb",
+                suggestions: []
+            ))
         }
 
         return issues

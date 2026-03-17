@@ -116,7 +116,9 @@ final class UndoToastPanel {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.dismiss()
+            Task { @MainActor [weak self] in
+                self?.dismiss()
+            }
         }
     }
 

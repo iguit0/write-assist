@@ -108,11 +108,15 @@ enum IssueCategory: String, CaseIterable, Sendable {
 }
 
 struct WritingIssue: Identifiable, Sendable {
-    let id = UUID()
     let type: IssueType
     let ruleID: String
     let range: NSRange
     let word: String
     let message: String
     let suggestions: [String]
+
+    /// Stable identity so SwiftUI diffing/caches don't churn on every re-check.
+    var id: String {
+        "\(ruleID):\(range.location):\(range.length):\(word.lowercased())"
+    }
 }

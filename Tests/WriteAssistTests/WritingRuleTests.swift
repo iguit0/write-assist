@@ -204,6 +204,39 @@ struct ConfusedWordRuleTests {
     }
 }
 
+// MARK: - SentenceFragmentRule
+
+@Suite("SentenceFragmentRule")
+struct SentenceFragmentRuleTests {
+    private let rule = SentenceFragmentRule()
+
+    @Test("flags sentence fragments without verbs")
+    func flagsSentenceFragmentsWithoutVerbs() {
+        let text = "A very good idea."
+        let issues = rule.check(text: text, analysis: analyze(text))
+
+        #expect(issues.count == 1)
+        #expect(issues[0].ruleID == "sentenceFragment")
+        #expect(issues[0].message.localizedStandardContains("fragment"))
+    }
+
+    @Test("does not flag complete sentences")
+    func doesNotFlagCompleteSentences() {
+        let text = "The plan is working."
+        let issues = rule.check(text: text, analysis: analyze(text))
+
+        #expect(issues.isEmpty)
+    }
+
+    @Test("ignores short fragments below threshold")
+    func ignoresShortFragmentsBelowThreshold() {
+        let text = "Quick note."
+        let issues = rule.check(text: text, analysis: analyze(text))
+
+        #expect(issues.isEmpty)
+    }
+}
+
 // MARK: - WritingIssue
 
 @Suite("WritingIssue")
@@ -235,5 +268,49 @@ struct WritingIssueTests {
         )
         #expect(issue.ruleID == "grammar")
         #expect(issue.suggestions == ["fix"])
+    }
+
+    @Test("uses stable identity for equivalent issues")
+    func usesStableIdentityForEquivalentIssues() {
+        let lhs = WritingIssue(
+            type: .grammar,
+            ruleID: "grammar",
+            range: NSRange(location: 4, length: 5),
+            word: "Error",
+            message: "Grammar issue",
+            suggestions: ["Fix"]
+        )
+        let rhs = WritingIssue(
+            type: .grammar,
+            ruleID: "grammar",
+            range: NSRange(location: 4, length: 5),
+            word: "error",
+            message: "Grammar issue",
+            suggestions: []
+        )
+
+        #expect(lhs.id == rhs.id)
+    }
+
+    @Test("changes identity when the issue location changes")
+    func changesIdentityWhenLocationChanges() {
+        let lhs = WritingIssue(
+            type: .grammar,
+            ruleID: "grammar",
+            range: NSRange(location: 4, length: 5),
+            word: "error",
+            message: "Grammar issue",
+            suggestions: []
+        )
+        let rhs = WritingIssue(
+            type: .grammar,
+            ruleID: "grammar",
+            range: NSRange(location: 10, length: 5),
+            word: "error",
+            message: "Grammar issue",
+            suggestions: []
+        )
+
+        #expect(lhs.id != rhs.id)
     }
 }

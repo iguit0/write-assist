@@ -20,7 +20,7 @@ public final class DocumentViewModel: @unchecked Sendable {
 
     /// IDs of issues that arrived since the popover was last opened.
     /// Used to show "new" indicators on issue cards.
-    var unseenIssueIDs: Set<UUID> = []
+    var unseenIssueIDs: Set<String> = []
 
     /// Called by StatusBarController when new issues are ready to be shown in the HUD.
     /// Receives the array of issues that haven't been shown to the user yet in this typing session.
@@ -182,12 +182,14 @@ public final class DocumentViewModel: @unchecked Sendable {
     // MARK: - Check Scheduling
 
     private var checkTask: Task<Void, Never>?
+    private var checkGeneration = 0
 
     /// Stores the pending AX timeout/fallback task so it can be cancelled if the
     /// AX injection completes before the 1-second deadline fires (#037).
     private var fallbackTask: Task<Void, Never>?
 
     func textDidChange(_ newText: String) {
+        guard newText != text else { return }
         text = newText
         ignoredRanges = []
         // Only reset HUD shown keys when the user is TYPING (not after a
@@ -205,13 +207,34 @@ public final class DocumentViewModel: @unchecked Sendable {
 
     func scheduleCheck() {
         checkTask?.cancel()
+        checkGeneration &+= 1
+        let generation = checkGeneration
         checkTask = Task { @MainActor in
             // 0.2s debounce — fast enough to feel responsive, long enough to avoid
             // checking on every character
             try? await Task.sleep(for: .seconds(0.2))
             guard !Task.isCancelled else { return }
-            await runCheck()
+            await runCheck(generation: generation)
         }
+    }
+
+    private nonisolated static func analyzeAndRunRules(
+        text: String,
+        formality: FormalityLevel,
+        audience: AudienceLevel,
+        disabledRules: Set<String>
+    ) async -> (NLAnalysis, [WritingIssue]) {
+        let analysis = NLAnalysisService.analyze(
+            text,
+            formality: formality,
+            audience: audience
+        )
+        let ruleIssues = RuleRegistry.runAll(
+            text: text,
+            analysis: analysis,
+            disabledRules: disabledRules
+        )
+        return (analysis, ruleIssues)
     }
 
     /// AI-first spell check with `SpellCheckService` (NSSpellChecker) fallback.
@@ -271,7 +294,8 @@ public final class DocumentViewModel: @unchecked Sendable {
         return await SpellCheckService.check(text: text)
     }
 
-    func runCheck() async {
+    func runCheck(generation: Int) async {
+        guard generation == checkGeneration else { return }
         logger.debug("runCheck: starting spell check (text length: \(self.text.count))")
         let currentText = text
 
@@ -285,23 +309,17 @@ public final class DocumentViewModel: @unchecked Sendable {
         // NL analysis + rule engine: both moved off @MainActor so they don't block
         // SwiftUI layout or input handling (NLTagger init is 50-200 ms on first use).
         async let spellIssues = resolveSpellIssues(text: currentText)
-        let (analysis, ruleIssues) = await Task.detached(priority: .userInitiated) {
-            let analysis = NLAnalysisService.analyze(
-                currentText,
-                formality: formality,
-                audience: audience
-            )
-            let ruleIssues = RuleRegistry.runAll(
-                text: currentText,
-                analysis: analysis,
-                disabledRules: disabledRules
-            )
-            return (analysis, ruleIssues)
-        }.value
+        async let analysisAndRules = Self.analyzeAndRunRules(
+            text: currentText,
+            formality: formality,
+            audience: audience,
+            disabledRules: disabledRules
+        )
+        let (analysis, ruleIssues) = await analysisAndRules
 
         let detected = await spellIssues + ruleIssues
-        guard !Task.isCancelled else {
-            logger.debug("runCheck: cancelled after checks returned")
+        guard !Task.isCancelled, generation == checkGeneration else {
+            logger.debug("runCheck: cancelled or stale after checks returned")
             return
         }
 

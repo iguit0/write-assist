@@ -7,6 +7,10 @@ import os
 private let logger = Logger(subsystem: "com.writeassist", category: "SpellCheckService")
 
 enum SpellCheckService {
+    private struct TextCheckingResultsBox: @unchecked Sendable {
+        let results: [NSTextCheckingResult]
+    }
+
     /// Hard timeout for a spell-check pass. Protects against the XPC service
     /// stalling (proven to happen via production logs).
     private static let timeout: Duration = .milliseconds(800)
@@ -75,7 +79,7 @@ enum SpellCheckService {
         await withCheckedContinuation { continuation in
             let handler: @Sendable (Int, [NSTextCheckingResult], NSOrthography, Int) -> Void = {
                 _, results, _, _ in
-                continuation.resume(returning: results)
+                continuation.resume(returning: TextCheckingResultsBox(results: results))
             }
 
             Task { @MainActor in
@@ -90,7 +94,7 @@ enum SpellCheckService {
                     completionHandler: handler
                 )
             }
-        }
+        }.results
     }
 
     // MARK: - Result Processing
