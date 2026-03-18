@@ -13,7 +13,8 @@ final class PersonalDictionary: @unchecked Sendable {
 
     private(set) var words: [String] = []
     private let storageKey = "personalDictionaryWords"
-    private let fileURL = PersonalDictionary.dictionaryFileURL
+    private let userDefaults: UserDefaults
+    private let fileURL: URL?
 
     private static let dictionaryFileURL: URL? = {
         let fileManager = FileManager.default
@@ -33,20 +34,15 @@ final class PersonalDictionary: @unchecked Sendable {
     }()
 
     private init() {
-        // Canonical source can come from either UserDefaults or persisted file.
-        // This helps survive app reinstalls where defaults may be wiped.
-        let defaultsWords = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
-        let fileWords = loadWordsFromFile()
+        self.userDefaults = .standard
+        self.fileURL = Self.dictionaryFileURL
+        loadAndReconcileOnStartup()
+    }
 
-        words = Self.normalized(defaultsWords + fileWords)
-        persist()
-
-        // Ensure all canonical words are learned by NSSpellChecker.
-        let checker = NSSpellChecker.shared
-        for word in words {
-            checker.learnWord(word)
-        }
-        logger.info("PersonalDictionary loaded \(self.words.count) words")
+    init(userDefaults: UserDefaults, fileURL: URL?) {
+        self.userDefaults = userDefaults
+        self.fileURL = fileURL
+        loadAndReconcileOnStartup()
     }
 
     func addWord(_ word: String) {
@@ -55,7 +51,7 @@ final class PersonalDictionary: @unchecked Sendable {
 
         words.append(lower)
         words = Self.normalized(words)
-        persist()
+        persistCanonical()
 
         NSSpellChecker.shared.learnWord(lower)
         logger.info("Learned word: '\(lower)'")
@@ -64,7 +60,7 @@ final class PersonalDictionary: @unchecked Sendable {
     func removeWord(_ word: String) {
         let lower = word.lowercased()
         words.removeAll { $0 == lower }
-        persist()
+        persistCanonical()
 
         NSSpellChecker.shared.unlearnWord(lower)
         logger.info("Unlearned word: '\(lower)'")
@@ -74,19 +70,37 @@ final class PersonalDictionary: @unchecked Sendable {
         words.contains(word.lowercased())
     }
 
-    private func persist() {
-        UserDefaults.standard.set(words, forKey: storageKey)
+    private func loadAndReconcileOnStartup() {
+        let fileWords = loadWordsFromFile()
+        let defaultsWords = userDefaults.stringArray(forKey: storageKey) ?? []
+
+        let canonical = Self.normalized(fileWords + defaultsWords)
+        words = canonical
+        persistCanonical()
+
+        let checker = NSSpellChecker.shared
+        for word in canonical {
+            checker.learnWord(word)
+        }
+
+        logger.info("PersonalDictionary loaded \(self.words.count) words")
+    }
+
+    private func persistCanonical() {
+        userDefaults.set(words, forKey: storageKey)
         saveWordsToFile(words)
     }
 
     private func loadWordsFromFile() -> [String] {
         guard let fileURL else { return [] }
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        guard let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+
+        do {
+            return try JSONDecoder().decode([String].self, from: data)
+        } catch {
             logger.error("Failed to decode personal dictionary file at \(fileURL.path, privacy: .public)")
             return []
         }
-        return decoded
     }
 
     private func saveWordsToFile(_ words: [String]) {
