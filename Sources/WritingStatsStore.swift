@@ -10,7 +10,7 @@ struct WritingSession: Codable, Identifiable, Sendable {
     var id: UUID
     var date: Date
     var wordCount: Int
-    var issuesByType: [String: Int]  // IssueType description -> count
+    var issuesByType: [String: Int]
     var correctionsApplied: Int
 }
 
@@ -20,20 +20,25 @@ public final class WritingStatsStore: @unchecked Sendable {
     public static let shared = WritingStatsStore()
 
     private(set) var sessions: [WritingSession] = []
-    private let storageKey = "writingSessions"
 
-    /// Current session tracking
+    private let userDefaults: UserDefaults
+    private let storageURL: URL?
+
     private(set) var currentSessionWordCount: Int = 0
     private(set) var currentSessionCorrections: Int = 0
     private var currentSessionIssues: [String: Int] = [:]
     private var sessionStartDate: Date = Date()
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([WritingSession].self, from: data) {
-            sessions = decoded
-        }
-        logger.info("WritingStatsStore loaded \(self.sessions.count) sessions")
+        self.userDefaults = .standard
+        self.storageURL = WritingStatsPersistence.defaultStorageURL()
+        loadSessions()
+    }
+
+    init(userDefaults: UserDefaults, storageURL: URL?) {
+        self.userDefaults = userDefaults
+        self.storageURL = storageURL
+        loadSessions()
     }
 
     func recordWordCount(_ count: Int) {
@@ -51,6 +56,7 @@ public final class WritingStatsStore: @unchecked Sendable {
 
     public func endSession() {
         guard currentSessionWordCount > 0 else { return }
+
         let session = WritingSession(
             id: UUID(),
             date: sessionStartDate,
@@ -58,13 +64,11 @@ public final class WritingStatsStore: @unchecked Sendable {
             issuesByType: currentSessionIssues,
             correctionsApplied: currentSessionCorrections
         )
+
         sessions.append(session)
-        // Keep last 90 days of sessions
-        let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
-        sessions = sessions.filter { $0.date >= cutoff }
+        pruneOldSessions()
         save()
 
-        // Reset current session
         currentSessionWordCount = 0
         currentSessionCorrections = 0
         currentSessionIssues = [:]
@@ -72,8 +76,6 @@ public final class WritingStatsStore: @unchecked Sendable {
 
         logger.info("Session ended. Total sessions: \(self.sessions.count)")
     }
-
-    // MARK: - Aggregation
 
     var totalWordsWritten: Int {
         sessions.reduce(0) { $0 + $1.wordCount }
@@ -102,9 +104,38 @@ public final class WritingStatsStore: @unchecked Sendable {
         return aggregate.sorted { $0.value > $1.value }.prefix(5).map { ($0.key, $0.value) }
     }
 
+    private func loadSessions() {
+        sessions = WritingStatsPersistence.load(
+            userDefaults: userDefaults,
+            storageURL: storageURL,
+            logger: logger
+        )
+
+        let previousCount = sessions.count
+        pruneOldSessions()
+        if sessions.count != previousCount {
+            save()
+        }
+
+        logger.info("WritingStatsStore loaded \(self.sessions.count) sessions")
+    }
+
+    private func pruneOldSessions() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
+        sessions = sessions.filter { $0.date >= cutoff }
+    }
+
     private func save() {
-        if let data = try? JSONEncoder().encode(sessions) {
-            UserDefaults.standard.set(data, forKey: storageKey)
+        let didSave = WritingStatsPersistence.saveToFile(
+            sessions: sessions,
+            storageURL: storageURL,
+            logger: logger
+        )
+
+        if !didSave,
+           let data = try? JSONEncoder().encode(sessions) {
+            userDefaults.set(data, forKey: WritingStatsPersistence.legacyStorageKey)
+            logger.error("Falling back to legacy UserDefaults writingSessions key")
         }
     }
 }
