@@ -2,206 +2,107 @@
 // Copyright © 2025 Igor Alves. All rights reserved.
 
 @preconcurrency import AppKit
-import CoreGraphics
 import os
 
 private let logger = Logger(subsystem: "com.writeassist", category: "DocumentViewModel")
 
-/// All mutable state is accessed exclusively on @MainActor.
-/// `@unchecked Sendable` is retained because `@Observable` classes used across
-/// closure boundaries (e.g., `onNewIssuesReadyForHUD` callbacks) may require
-/// `Sendable` conformance in Swift 6 strict concurrency mode.
 @MainActor
 @Observable
 public final class DocumentViewModel: @unchecked Sendable {
     public var text: String = ""
     var issues: [WritingIssue] = []
-    var ignoredRanges: Set<String> = []
 
     /// IDs of issues that arrived since the popover was last opened.
-    /// Used to show "new" indicators on issue cards.
     var unseenIssueIDs: Set<String> = []
 
-    /// Called by StatusBarController when new issues are ready to be shown in the HUD.
-    /// Receives the array of issues that haven't been shown to the user yet in this typing session.
     var onNewIssuesReadyForHUD: (([WritingIssue]) -> Void)?
-
-    /// Called after a correction is applied so the UI can surface an Undo toast.
     var onCorrectionApplied: ((WritingIssue, String) -> Void)?
 
-    /// Last AX replacement range for undo (nil if correction used paste fallback).
-    private var lastCorrectionAXRange: CFRange?
-    private var lastCorrectionOriginal: String?
-    private var lastCorrectionReplacement: String?
+    public weak var inputMonitor: GlobalInputMonitor? {
+        didSet { correctionApplicator.markInputMonitor(inputMonitor) }
+    }
 
-    /// Keys of issues whose HUD has already been shown in the current typing session.
-    /// Cleared on every textDidChange from USER typing so the HUD can re-appear
-    /// after the user keeps typing. NOT cleared during programmatic buffer updates
-    /// (e.g., after applying a correction) to prevent re-triggering HUDs.
-    private var hudShownKeys: Set<String> = []
-
-    /// Keys of issues that were just corrected. Suppresses re-showing the HUD for
-    /// a word that was already corrected (while the buffer may still contain it).
-    /// Entries are pruned automatically when the issue disappears from detection.
-    private var recentlyCorrectedKeys: Set<String> = []
-
-    /// True while a correction is being applied (AX injection in flight).
-    /// Suppresses HUD display to prevent competing AX calls and rapid HUD cycling.
-    private(set) var isCorrectionInFlight = false
-
-    /// Timestamp of the last correction. Used to enforce a cooldown period
-    /// before allowing new HUD popups (prevents rapid show/dismiss cycles).
-    private var lastCorrectionTime: ContinuousClock.Instant?
-
-    /// Minimum time after a correction before a new HUD can appear.
-    private let hudCooldownAfterCorrection: Duration = .seconds(1.5)
-
-    /// Whether the current textDidChange call originates from a programmatic
-    /// buffer update (correction) rather than user typing.
-    private var isProgrammaticBufferUpdate = false
-
-    /// Weak reference to the input monitor so we can update the buffer after correction.
-    public weak var inputMonitor: GlobalInputMonitor?
-
-    public init() {}
-
-    /// Cached NL analysis result, updated on each check cycle.
     private(set) var cachedAnalysis: NLAnalysis?
+    private(set) var metrics: DocumentMetrics
 
-    /// Active category filter for the issue list. Nil means show all.
-    var selectedCategory: IssueCategory?
-
-    /// Detected tone from the latest NL analysis.
-    var detectedTone: DetectedTone { cachedAnalysis?.detectedTone ?? .neutral }
-
-    /// Call this when the popover opens to mark all current issues as seen.
-    func markAllSeen() {
-        unseenIssueIDs.removeAll()
-    }
-
-    // MARK: - Basic Stats
-
-    var wordCount: Int {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return 0 }
-        return trimmed.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .count
-    }
-
-    var characterCount: Int {
-        text.count
-    }
-
-    // MARK: - Metrics
-
-    var sentenceCount: Int {
-        cachedAnalysis?.sentenceCount ?? max(1, text.components(separatedBy: .init(charactersIn: ".!?")).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count)
-    }
-
-    var averageSentenceLength: Double {
-        cachedAnalysis?.averageSentenceLength ?? (wordCount > 0 ? Double(wordCount) / Double(sentenceCount) : 0)
-    }
-
-    var paragraphCount: Int {
-        guard !text.isEmpty else { return 0 }
-        return text.components(separatedBy: "\n\n")
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .count
-    }
-
-    var vocabularyDiversity: Double {
-        cachedAnalysis?.vocabularyDiversity ?? 0
-    }
-
-    var averageWordLength: Double {
-        cachedAnalysis?.averageWordLength ?? 0
-    }
-
-    /// Flesch-Kincaid readability score.
-    /// 206.835 - 1.015*(words/sentences) - 84.6*(syllables/words)
-    var readabilityScore: Double {
-        let wc = Double(wordCount)
-        let sc = Double(sentenceCount)
-        let syllables = Double(cachedAnalysis?.syllableCount ?? wordCount)
-        guard wc > 0, sc > 0 else { return 100 }
-        let score = 206.835 - 1.015 * (wc / sc) - 84.6 * (syllables / wc)
-        return max(0, min(100, score))
-    }
-
-    /// Estimated reading time in minutes (250 wpm).
-    var readingTime: Double {
-        Double(wordCount) / 250.0
-    }
-
-    /// Estimated speaking time in minutes (150 wpm).
-    var speakingTime: Double {
-        Double(wordCount) / 150.0
-    }
-
-    // MARK: - Writing Score
-
-    /// Multi-dimensional writing score (0–100) combining four dimensions:
-    /// - Correctness: spelling & grammar issues deduct up to 40 points
-    /// - Clarity: passive voice, run-ons, fragments, wordiness deduct up to 25 points
-    /// - Engagement: hedging & redundancy deduct up to 20 points
-    /// - Delivery: style & inclusive language issues deduct up to 15 points
-    /// Score is clamped to [0, 100]. Returns 100 for empty documents.
-    var writingScore: Int {
-        guard wordCount > 0 else { return 100 }
-
-        // Per-issue penalty, scaled by document length to avoid penalising long documents
-        // too harshly. Penalty per issue decreases as the document grows.
-        let scale = max(1.0, Double(wordCount) / 100.0)
-
-        let correctnessPenalty = min(40.0, Double(spellingCount + grammarCount) * 4.0 / scale)
-        let clarityPenalty     = min(25.0, Double(clarityCount) * 3.0 / scale)
-        let engagementPenalty  = min(20.0, Double(engagementCount) * 2.0 / scale)
-        let deliveryPenalty    = min(15.0, Double(styleCount) * 2.0 / scale)
-
-        let score = 100.0 - correctnessPenalty - clarityPenalty - engagementPenalty - deliveryPenalty
-        return max(0, Int(score.rounded()))
-    }
-
-    // MARK: - Issue Counts
-
-    var spellingCount: Int { issues.filter { $0.type == .spelling }.count }
-    var grammarCount: Int { issues.filter { $0.type == .grammar }.count }
-    var clarityCount: Int { issues.filter { $0.type.category == .clarity }.count }
-    var styleCount: Int { issues.filter { $0.type.category == .delivery }.count }
-    var engagementCount: Int { issues.filter { $0.type.category == .engagement }.count }
-
-    var totalActiveIssueCount: Int { issues.count }
-
-    /// Issues filtered by the currently selected category (nil = all).
-    var filteredIssues: [WritingIssue] {
-        guard let category = selectedCategory else { return issues }
-        return issues.filter { $0.type.category == category }
-    }
-
-    // MARK: - Check Scheduling
+    private let issueGatekeeper: IssueGatekeeper
+    private let correctionApplicator: CorrectionApplicator
+    private let writingStatsStore: WritingStatsStore
+    private let ignoreRulesStore: IgnoreRulesStore
+    private let preferencesManager: PreferencesManager
 
     private var checkTask: Task<Void, Never>?
     private var checkGeneration = 0
 
-    /// Stores the pending AX timeout/fallback task so it can be cancelled if the
-    /// AX injection completes before the 1-second deadline fires (#037).
-    private var fallbackTask: Task<Void, Never>?
+    public init() {
+        let writingStatsStore = WritingStatsStore.shared
+        self.issueGatekeeper = IssueGatekeeper()
+        self.writingStatsStore = writingStatsStore
+        self.correctionApplicator = CorrectionApplicator(writingStatsStore: writingStatsStore)
+        self.ignoreRulesStore = .shared
+        self.preferencesManager = .shared
+        self.metrics = .build(text: "", analysis: nil, issues: [])
+        wireCallbacks()
+    }
+
+    init(
+        issueGatekeeper: IssueGatekeeper,
+        writingStatsStore: WritingStatsStore = .shared,
+        ignoreRulesStore: IgnoreRulesStore = .shared,
+        preferencesManager: PreferencesManager = .shared
+    ) {
+        self.issueGatekeeper = issueGatekeeper
+        self.writingStatsStore = writingStatsStore
+        self.correctionApplicator = CorrectionApplicator(writingStatsStore: writingStatsStore)
+        self.ignoreRulesStore = ignoreRulesStore
+        self.preferencesManager = preferencesManager
+        self.metrics = .build(text: "", analysis: nil, issues: [])
+        wireCallbacks()
+    }
+
+    private func wireCallbacks() {
+        correctionApplicator.onCorrectionApplied = { [weak self] issue, correction in
+            self?.onCorrectionApplied?(issue, correction)
+        }
+    }
+
+    var isCorrectionInFlight: Bool { correctionApplicator.isCorrectionInFlight }
+    var detectedTone: DetectedTone { metrics.detectedTone }
+
+    func markAllSeen() {
+        unseenIssueIDs = issueGatekeeper.markAllSeen()
+    }
+
+    // MARK: - Forwarded metrics
+
+    var wordCount: Int { metrics.wordCount }
+    var characterCount: Int { metrics.characterCount }
+    var sentenceCount: Int { metrics.sentenceCount }
+    var averageSentenceLength: Double { metrics.averageSentenceLength }
+    var paragraphCount: Int { metrics.paragraphCount }
+    var vocabularyDiversity: Double { metrics.vocabularyDiversity }
+    var averageWordLength: Double { metrics.averageWordLength }
+    var readabilityScore: Double { metrics.readabilityScore }
+    var readingTime: Double { metrics.readingTime }
+    var speakingTime: Double { metrics.speakingTime }
+    var writingScore: Int { metrics.writingScore }
+
+    var spellingCount: Int { metrics.issueSummary.spelling }
+    var grammarCount: Int { metrics.issueSummary.grammar }
+    var clarityCount: Int { metrics.issueSummary.clarity }
+    var engagementCount: Int { metrics.issueSummary.engagement }
+    var styleCount: Int { metrics.issueSummary.delivery }
+    var totalActiveIssueCount: Int { metrics.issueSummary.total }
 
     func textDidChange(_ newText: String) {
+        textDidChange(newText, isProgrammatic: false)
+    }
+
+    func textDidChange(_ newText: String, isProgrammatic: Bool) {
         guard newText != text else { return }
         text = newText
-        ignoredRanges = []
-        // Only reset HUD shown keys when the user is TYPING (not after a
-        // programmatic correction). Clearing hudShownKeys after a correction
-        // was causing ALL remaining issues to re-trigger the HUD, leading to
-        // rapid show/dismiss cycles and competing AX calls that deadlocked.
-        if !isProgrammaticBufferUpdate {
-            logger.debug("textDidChange: user typing — clearing hudShownKeys")
-            hudShownKeys = []
-        } else {
-            logger.debug("textDidChange: programmatic update — preserving hudShownKeys")
-        }
+        issueGatekeeper.handleTextChange(isProgrammatic: isProgrammatic)
+        rebuildMetrics(analysis: cachedAnalysis, issues: issues)
         scheduleCheck()
     }
 
@@ -210,8 +111,6 @@ public final class DocumentViewModel: @unchecked Sendable {
         checkGeneration &+= 1
         let generation = checkGeneration
         checkTask = Task { @MainActor in
-            // 0.2s debounce — fast enough to feel responsive, long enough to avoid
-            // checking on every character
             try? await Task.sleep(for: .seconds(0.2))
             guard !Task.isCancelled else { return }
             await runCheck(generation: generation)
@@ -237,8 +136,6 @@ public final class DocumentViewModel: @unchecked Sendable {
         return (analysis, ruleIssues)
     }
 
-    /// Passive spell checking is always local.
-    /// Cloud AI remains available only for explicit rewrite/suggestion actions.
     private func resolveSpellIssues(text: String) async -> [WritingIssue] {
         guard !Task.isCancelled else { return [] }
         logger.debug("resolveSpellIssues: passive spell check stays local")
@@ -247,18 +144,12 @@ public final class DocumentViewModel: @unchecked Sendable {
 
     func runCheck(generation: Int) async {
         guard generation == checkGeneration else { return }
-        logger.debug("runCheck: starting spell check (text length: \(self.text.count))")
         let currentText = text
 
-        // Snapshot preferences before async work
-        let prefs = PreferencesManager.shared
-        let formality = prefs.formalityLevel
-        let audience = prefs.audienceLevel
-        let disabledRules = prefs.disabledRules
+        let formality = preferencesManager.formalityLevel
+        let audience = preferencesManager.audienceLevel
+        let disabledRules = preferencesManager.disabledRules
 
-        // Spell check: AI first (when configured), NSSpellChecker fallback
-        // NL analysis + rule engine: both moved off @MainActor so they don't block
-        // SwiftUI layout or input handling (NLTagger init is 50-200 ms on first use).
         async let spellIssues = resolveSpellIssues(text: currentText)
         async let analysisAndRules = Self.analyzeAndRunRules(
             text: currentText,
@@ -266,464 +157,62 @@ public final class DocumentViewModel: @unchecked Sendable {
             audience: audience,
             disabledRules: disabledRules
         )
-        let (analysis, ruleIssues) = await analysisAndRules
 
+        let (analysis, ruleIssues) = await analysisAndRules
         let detected = await spellIssues + ruleIssues
-        guard !Task.isCancelled, generation == checkGeneration else {
-            logger.debug("runCheck: cancelled or stale after checks returned")
-            return
-        }
+
+        guard !Task.isCancelled, generation == checkGeneration else { return }
 
         cachedAnalysis = analysis
-        logger.debug("runCheck: checks complete — \(detected.count) raw issues")
 
-        // Record stats
-        WritingStatsStore.shared.recordWordCount(wordCount)
+        writingStatsStore.recordWordCount(metrics.wordCount)
         for issue in detected {
-            WritingStatsStore.shared.recordIssue(type: issue.type)
+            writingStatsStore.recordIssue(type: issue.type)
         }
 
-        // Filter out persistent ignores and session ignores
-        let ignoreStore = IgnoreRulesStore.shared
-        let newIssues = detected.filter {
-            !ignoredRanges.contains(ignoredKey(for: $0))
-            && !ignoreStore.isIgnored(word: $0.word, ruleID: $0.ruleID)
-        }
+        let previousIssues = issues
+        let visibleIssueIDs = Set(detected.map(\.id))
+        correctionApplicator.pruneRecentlyCorrected(keeping: visibleIssueIDs)
 
-        // Track which issues are genuinely new (not already in the list by word+range)
-        // Used for the badge "unseen" indicator in the sidebar
-        let existingKeys = Set(issues.map { ignoredKey(for: $0) })
-        let brandNew = newIssues.filter { !existingKeys.contains(ignoredKey(for: $0)) }
-        unseenIssueIDs.formUnion(brandNew.map(\.id))
+        let update = issueGatekeeper.reconcile(
+            detectedIssues: detected,
+            previousVisibleIssues: previousIssues,
+            ignoreStore: ignoreRulesStore,
+            recentlyCorrectedIssueIDs: correctionApplicator.recentlyCorrectedIssueIDs,
+            allowHUD: correctionApplicator.canShowHUD()
+        )
 
-        issues = newIssues
+        issues = update.visibleIssues
+        unseenIssueIDs = update.unseenIssueIDs
+        rebuildMetrics(analysis: analysis, issues: update.visibleIssues)
 
-        // Prune recentlyCorrectedKeys: once an issue disappears from detection (i.e.,
-        // the correction was actually applied in the external app), we can forget it.
-        // Keep entries only for issues that are STILL detected (buffer desync case).
-        let currentKeys = Set(newIssues.map { ignoredKey(for: $0) })
-        recentlyCorrectedKeys = recentlyCorrectedKeys.filter { currentKeys.contains($0) }
-
-        // ── HUD gating ──────────────────────────────────────────────────────────
-        // Suppress HUD when a correction is in flight (AX calls still active)
-        // or within the cooldown period after the last correction.
-        if isCorrectionInFlight {
-            logger.debug("runCheck: skipping HUD — correction in flight")
-            return
-        }
-        if let lastTime = lastCorrectionTime,
-           ContinuousClock.now - lastTime < hudCooldownAfterCorrection {
-            logger.debug("runCheck: skipping HUD — within cooldown period")
-            return
-        }
-
-        // Determine which issues haven't had their HUD shown yet in this typing session.
-        // Also skip issues that were just corrected (even if buffer still detects them).
-        let pendingHUD = newIssues.filter {
-            !hudShownKeys.contains(ignoredKey(for: $0)) &&
-            !recentlyCorrectedKeys.contains(ignoredKey(for: $0))
-        }
-        if !pendingHUD.isEmpty {
-            logger.debug("runCheck: \(pendingHUD.count) issues pending HUD display")
-            // Mark them so we don't double-show in the same session
-            for issue in pendingHUD {
-                hudShownKeys.insert(ignoredKey(for: issue))
-            }
-            onNewIssuesReadyForHUD?(pendingHUD)
+        if !update.pendingHUDIssues.isEmpty {
+            onNewIssuesReadyForHUD?(update.pendingHUDIssues)
         }
     }
 
-    /// Applies the correction in-place in the focused application.
-    ///
-    /// This function performs all UI state updates synchronously on @MainActor,
-    /// then fires off AX injection on a background thread with a hard 0.8s timeout.
-    /// This prevents any AX API call from ever blocking the main thread — which was
-    /// the root cause of the permanent freeze after the first correction.
-    ///
-    /// Strategy:
-    ///  1. Background Task: AX-based in-place word replacement (select word → replace).
-    ///  2. If AX times out or fails: clipboard + simulated Cmd+V (session-level tap).
-    ///  3. Ultimate fallback: clipboard only (correction is always on the pasteboard).
     func applyCorrection(_ issue: WritingIssue, correction: String) {
-        logger.info("applyCorrection: '\(issue.word, privacy: .sensitive)' → '\(correction, privacy: .sensitive)' [START]")
-
-        var didShowUndoToast = false
-        let showUndoToast = { [weak self] in
-            guard !didShowUndoToast else { return }
-            didShowUndoToast = true
-            self?.lastCorrectionOriginal = issue.word
-            self?.lastCorrectionReplacement = correction
-            self?.onCorrectionApplied?(issue, correction)
-        }
-
-        // ── Phase 1: fast @MainActor state updates ────────────────────────────
-        isCorrectionInFlight = true
-        lastCorrectionTime = .now
-        WritingStatsStore.shared.recordCorrection()
-
-        // Save existing clipboard content so we can restore it if the paste fallback fires.
-        // The AX injection path never touches the clipboard, so the user's copied content
-        // is preserved whenever AX succeeds (the common case).
-        // Remove issue from local list immediately so sidebar UI updates now
         issues.removeAll { $0.id == issue.id }
-        logger.debug("applyCorrection: issue removed from list (\(self.issues.count) remaining)")
-
-        // Mark as recently corrected so runCheck() won't re-trigger the HUD
-        // for this word while the buffer may still contain it.
-        recentlyCorrectedKeys.insert(ignoredKey(for: issue))
-
-        // Update the input monitor's buffer to reflect the corrected text so
-        // the next spell-check doesn't re-detect the same error.
-        // Set the programmatic flag so textDidChange preserves hudShownKeys.
-        isProgrammaticBufferUpdate = true
-        inputMonitor?.replaceInBuffer(old: issue.word, new: correction)
-        isProgrammaticBufferUpdate = false
-        logger.debug("applyCorrection: buffer updated, programmatic flag reset")
-
-        // ── Phase 2: AX injection — pure Swift concurrency (#037) ────────────
-        // Replace DispatchWorkItem + DispatchQueue with Task throughout so all
-        // scheduled-main-actor work uses a single concurrency mechanism.
-        let word = issue.word
-        fallbackTask?.cancel()
-        fallbackTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            logger.warning("applyCorrection: AX timed out — firing paste fallback")
-            let transaction = PasteboardTransaction.write(correction)
-            Self.simulatePasteStatic()
-            showUndoToast()
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            transaction.restoreIfUnchanged()
-            self?.isCorrectionInFlight = false
-            logger.debug("applyCorrection: correctionInFlight cleared (timeout path)")
-        }
-
-        // Detached task captures only String values — no self capture needed (#037)
-        let axTask = Task.detached(priority: .userInitiated) {
-            Self.injectCorrectionViaAXBackgroundResult(word: word, correction: correction)
-        }
-        // Result handler runs on @MainActor — safe to capture [weak self] directly
-        Task { @MainActor [weak self] in
-            let axResult = await axTask.value
-            let axSucceeded = axResult.success
-            self?.lastCorrectionAXRange = axSucceeded ? axResult.replacementRange : nil
-            self?.fallbackTask?.cancel()
-            logger.info("applyCorrection: AX injection result = \(axSucceeded)")
-            if !axSucceeded {
-                logger.warning("applyCorrection: AX failed — firing paste fallback")
-                let transaction = PasteboardTransaction.write(correction)
-                Self.simulatePasteStatic()
-                showUndoToast()
-                try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                transaction.restoreIfUnchanged()
-            } else {
-                showUndoToast()
-            }
-            self?.isCorrectionInFlight = false
-            logger.debug("applyCorrection: correctionInFlight cleared (normal path)")
-        }
-        logger.debug("applyCorrection: Phase 1 complete, background AX dispatched [END sync]")
+        unseenIssueIDs.remove(issue.id)
+        rebuildMetrics(analysis: cachedAnalysis, issues: issues)
+        correctionApplicator.apply(issue: issue, correction: correction)
     }
 
-    /// Reverses the last correction by replacing the corrected word with its original form.
     func undoCorrection(original: String, correction: String) {
-        logger.info("undoCorrection: '\(correction, privacy: .sensitive)' → '\(original, privacy: .sensitive)' [START]")
-
-        isCorrectionInFlight = true
-        lastCorrectionTime = .now
-
-        isProgrammaticBufferUpdate = true
-        inputMonitor?.replaceInBuffer(old: correction, new: original)
-        isProgrammaticBufferUpdate = false
-
-        let rangeOverride: CFRange? = (lastCorrectionOriginal == original
-            && lastCorrectionReplacement == correction) ? lastCorrectionAXRange : nil
-        lastCorrectionAXRange = nil
-
-        fallbackTask?.cancel()
-        fallbackTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            logger.warning("undoCorrection: AX timed out — firing paste fallback")
-            let transaction = PasteboardTransaction.write(original)
-            Self.simulatePasteStatic()
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            transaction.restoreIfUnchanged()
-            self?.isCorrectionInFlight = false
-        }
-
-        let axTask = Task.detached(priority: .userInitiated) {
-            Self.injectCorrectionViaAXBackground(word: correction, correction: original, rangeOverride: rangeOverride)
-        }
-        Task { @MainActor [weak self] in
-            let axSucceeded = await axTask.value
-            self?.fallbackTask?.cancel()
-            if !axSucceeded {
-                logger.warning("undoCorrection: AX failed — firing paste fallback")
-                let transaction = PasteboardTransaction.write(original)
-                Self.simulatePasteStatic()
-                try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                transaction.restoreIfUnchanged()
-            }
-            self?.isCorrectionInFlight = false
-            logger.debug("undoCorrection: correctionInFlight cleared")
-        }
+        correctionApplicator.undo(original: original, correction: correction)
     }
 
-    /// AX-based word replacement — runs on a background thread (nonisolated).
-    /// Returns true if the replacement was successfully applied.
-    ///
-    /// Marked `nonisolated` and `static` so it can be called from a detached Task
-    /// without capturing `self` across actor boundaries.
-    private struct AXCorrectionResult {
-        let success: Bool
-        let replacementRange: CFRange?
-    }
-
-    private nonisolated static func injectCorrectionViaAXBackgroundResult(
-        word: String,
-        correction: String
-    ) -> AXCorrectionResult {
-        logger.debug("AX-bg: getting focused element")
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
-        ) == .success, let focusedValue else {
-            logger.warning("AX-bg: failed to get focused element")
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-        // CF types cannot be checked with `as?` — validate via CFGetTypeID before casting.
-        guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            logger.warning("AX-bg: focused value is not an AXUIElement")
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-        let element = focusedValue as! AXUIElement // safe: type ID verified above
-
-        // Read the current text of the focused element
-        logger.debug("AX-bg: reading text value")
-        var textValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            &textValue
-        ) == .success,
-        let textValue,
-        let fullText = textValue as? String else {
-            logger.warning("AX-bg: failed to read text value from focused element")
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-
-        // Find the last occurrence of the misspelled word in the element's text
-        // (using the last occurrence because the buffer tracks the tail of the document)
-        guard let wordRange = fullText.range(of: word, options: .backwards) else {
-            logger.warning("AX-bg: word '\(word, privacy: .sensitive)' not found in element text")
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-        let nsRange = NSRange(wordRange, in: fullText)
-
-        // Build CFRange for the AX API
-        var cfRange = CFRange(location: nsRange.location, length: nsRange.length)
-        guard let axRange = AXValueCreate(.cfRange, &cfRange) else {
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-
-        // Select the misspelled word
-        logger.debug("AX-bg: setting selected text range")
-        let setRangeResult = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            axRange
-        )
-        guard setRangeResult == .success else {
-            logger.warning("AX-bg: failed to set selected text range")
-            return AXCorrectionResult(success: false, replacementRange: nil)
-        }
-
-        // Replace selected text with the correction
-        logger.debug("AX-bg: setting selected text (length: \(correction.count))")
-        let setTextResult = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            correction as CFString
-        )
-        logger.debug("AX-bg: set text result = \(setTextResult == .success ? "success" : "failed")")
-        let replacementLength = (correction as NSString).length
-        let replacementRange = CFRange(location: nsRange.location, length: replacementLength)
-        return AXCorrectionResult(success: setTextResult == .success, replacementRange: replacementRange)
-    }
-
-    private nonisolated static func injectCorrectionViaAXBackground(
-        word: String,
-        correction: String,
-        rangeOverride: CFRange?
-    ) -> Bool {
-        logger.debug("AX-bg: getting focused element")
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
-        ) == .success, let focusedValue else {
-            logger.warning("AX-bg: failed to get focused element")
-            return false
-        }
-        guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            logger.warning("AX-bg: focused value is not an AXUIElement")
-            return false
-        }
-        let element = focusedValue as! AXUIElement
-
-        logger.debug("AX-bg: reading text value")
-        var textValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXValueAttribute as CFString,
-            &textValue
-        ) == .success,
-        let textValue,
-        let fullText = textValue as? String else {
-            logger.warning("AX-bg: failed to read text value from focused element")
-            return false
-        }
-
-        let nsRange: NSRange
-        if let override = rangeOverride,
-           override.location >= 0,
-           override.length >= 0,
-           override.location + override.length <= (fullText as NSString).length {
-            nsRange = NSRange(location: override.location, length: override.length)
-        } else {
-            guard let wordRange = fullText.range(of: word, options: .backwards) else {
-                logger.warning("AX-bg: word '\(word, privacy: .sensitive)' not found in element text")
-                return false
-            }
-            nsRange = NSRange(wordRange, in: fullText)
-        }
-
-        var cfRange = CFRange(location: nsRange.location, length: nsRange.length)
-        guard let axRange = AXValueCreate(.cfRange, &cfRange) else { return false }
-
-        logger.debug("AX-bg: setting selected text range")
-        let setRangeResult = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextRangeAttribute as CFString,
-            axRange
-        )
-        guard setRangeResult == .success else {
-            logger.warning("AX-bg: failed to set selected text range")
-            return false
-        }
-
-        logger.debug("AX-bg: setting selected text (length: \(correction.count))")
-        let setTextResult = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            correction as CFString
-        )
-        logger.debug("AX-bg: set text result = \(setTextResult == .success ? "success" : "failed")")
-        return setTextResult == .success
-    }
-
-    /// Posts a synthetic Cmd+V key event to paste clipboard content into the
-    /// currently focused application. Used as a fallback when AX injection fails or times out.
-    /// Uses .cgAnnotatedSessionEventTap (session-level) to avoid HID-level permission issues.
-    /// `static` so it can be called from a detached Task without capturing `self`.
-    private static func simulatePasteStatic() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        // Virtual key code 9 = V on US keyboard layout
-        let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        let vUp   = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        vDown?.flags = .maskCommand
-        vUp?.flags   = .maskCommand
-        vDown?.post(tap: .cgAnnotatedSessionEventTap)
-        vUp?.post(tap: .cgAnnotatedSessionEventTap)
-    }
-
-    /// Replaces the currently selected text in the focused application.
-    /// Used by `SelectionSuggestionPanel` when applying an AI-suggested rewrite.
-    /// Unlike `applyCorrection(_:correction:)`, this works with arbitrary selections —
-    /// it sets `kAXSelectedTextAttribute` directly rather than searching for a word.
     func replaceSelection(replacement: String) {
-        logger.info("replaceSelection: length=\(replacement.count) [START]")
-
-        isCorrectionInFlight = true
-        lastCorrectionTime = .now
-
-        // Save existing clipboard content so we can restore it if the paste fallback fires.
-        // AX injection — pure Swift concurrency (#037)
-        fallbackTask?.cancel()
-        fallbackTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            logger.warning("replaceSelection: AX timed out — firing paste fallback")
-            let transaction = PasteboardTransaction.write(replacement)
-            Self.simulatePasteStatic()
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            transaction.restoreIfUnchanged()
-            self?.isCorrectionInFlight = false
-        }
-
-        // Detached task captures only String values — no self capture needed (#037)
-        let axTask = Task.detached(priority: .userInitiated) {
-            Self.injectSelectedTextViaAXBackground(replacement: replacement)
-        }
-        Task { @MainActor [weak self] in
-            let axSucceeded = await axTask.value
-            self?.fallbackTask?.cancel()
-            if !axSucceeded {
-                logger.warning("replaceSelection: AX failed — firing paste fallback")
-                let transaction = PasteboardTransaction.write(replacement)
-                Self.simulatePasteStatic()
-                try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled else { return }
-                transaction.restoreIfUnchanged()
-            }
-            self?.isCorrectionInFlight = false
-            logger.debug("replaceSelection: correctionInFlight cleared")
-        }
-    }
-
-    /// Replaces the currently selected text in the focused UI element.
-    /// Sets `kAXSelectedTextAttribute` directly — the selection must already exist
-    /// in the target app (the panel is non-activating, so the original selection persists).
-    private nonisolated static func injectSelectedTextViaAXBackground(replacement: String) -> Bool {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedRef
-        ) == .success,
-              let focusedRef,
-              CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
-            logger.warning("replaceSelection AX-bg: no focused element")
-            return false
-        }
-        let element = focusedRef as! AXUIElement // safe: type ID verified above
-        let result = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            replacement as CFString
-        )
-        logger.debug("replaceSelection AX-bg: result = \(result == .success ? "success" : "failed")")
-        return result == .success
+        correctionApplicator.replaceSelection(replacement: replacement)
     }
 
     func ignoreIssue(_ issue: WritingIssue) {
-        ignoredRanges.insert(ignoredKey(for: issue))
+        unseenIssueIDs = issueGatekeeper.ignoreSession(issue)
         issues.removeAll { $0.id == issue.id }
+        rebuildMetrics(analysis: cachedAnalysis, issues: issues)
     }
 
-    private func ignoredKey(for issue: WritingIssue) -> String {
-        "\(issue.word):\(issue.range.location)"
+    private func rebuildMetrics(analysis: NLAnalysis?, issues: [WritingIssue]) {
+        metrics = DocumentMetrics.build(text: text, analysis: analysis, issues: issues)
     }
 }
