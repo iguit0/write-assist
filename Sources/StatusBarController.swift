@@ -111,6 +111,10 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         monitor.onSelectionCleared = { [weak self] in
             self?.selectionPanel?.dismiss()
         }
+        monitor.onSecureContextDetected = { [weak self] in
+            self?.selectionPanel?.dismiss()
+            self?.hudPanel?.dismiss()
+        }
         monitor.start()
 
         inputMonitor.onAccessibilityPermissionChanged = { [weak monitor] granted in
@@ -172,6 +176,12 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
                 self?.hudPanel?.dismiss()
                 self?.selectionPanel?.dismiss()
                 self?.undoToastPanel?.dismiss()
+            }
+        }
+        inputMonitor.onSecureContextDetected = { [weak self] in
+            Task { @MainActor in
+                self?.selectionPanel?.dismiss()
+                self?.hudPanel?.dismiss()
             }
         }
 

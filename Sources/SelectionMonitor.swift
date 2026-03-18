@@ -20,6 +20,9 @@ final class SelectionMonitor {
     /// Called when the selection is cleared after having been non-empty.
     var onSelectionCleared: (() -> Void)?
 
+    /// Called when the focused element becomes a secure field or secure input is active.
+    var onSecureContextDetected: (() -> Void)?
+
     /// Key of the last selection we fired `onSelectionChanged` for.
     /// Prevents re-firing for the same unchanged selection.
     private var lastSelectionKey = ""
@@ -38,6 +41,12 @@ final class SelectionMonitor {
 
     private let minCharCount = 15
     private let minWordCount = 3
+
+    private enum ReadSelectionResult {
+        case selection(String, NSRange, CGRect)
+        case none
+        case secureContext
+    }
 
     // MARK: - Lifecycle
 
@@ -126,7 +135,15 @@ final class SelectionMonitor {
             }
         }
 
-        guard let (text, range, bounds) = result else {
+        switch result {
+        case .secureContext:
+            if !lastSelectionKey.isEmpty {
+                lastSelectionKey = ""
+                onSelectionCleared?()
+            }
+            onSecureContextDetected?()
+            return
+        case .none:
             // No selection — fire cleared callback if we were tracking one.
             if !lastSelectionKey.isEmpty {
                 lastSelectionKey = ""
@@ -134,57 +151,58 @@ final class SelectionMonitor {
                 onSelectionCleared?()
             }
             return
-        }
-
-        // Require at least one letter — filters out whitespace-only (tab indentation,
-        // blank lines) and numeric-only (page numbers, codes) selections that would
-        // waste an AI rewrite request for meaningless content.
-        guard text.contains(where: { $0.isLetter }) else {
-            if !lastSelectionKey.isEmpty {
-                lastSelectionKey = ""
-                onSelectionCleared?()
+        case let .selection(text, range, bounds):
+            // Require at least one letter — filters out whitespace-only (tab indentation,
+            // blank lines) and numeric-only (page numbers, codes) selections that would
+            // waste an AI rewrite request for meaningless content.
+            guard text.contains(where: { $0.isLetter }) else {
+                if !lastSelectionKey.isEmpty {
+                    lastSelectionKey = ""
+                    onSelectionCleared?()
+                }
+                return
             }
-            return
-        }
 
-        // Apply threshold: must be ≥ 3 words OR ≥ 15 chars.
-        let wordCount = text.split(whereSeparator: \.isWhitespace).count
-        guard text.count >= minCharCount || wordCount >= minWordCount else {
-            if !lastSelectionKey.isEmpty {
-                lastSelectionKey = ""
-                onSelectionCleared?()
+            // Apply threshold: must be ≥ 3 words OR ≥ 15 chars.
+            let wordCount = text.split(whereSeparator: \.isWhitespace).count
+            guard text.count >= minCharCount || wordCount >= minWordCount else {
+                if !lastSelectionKey.isEmpty {
+                    lastSelectionKey = ""
+                    onSelectionCleared?()
+                }
+                return
             }
-            return
+
+            // Only fire if the selection actually changed.
+            let key = "\(range.location):\(range.length)"
+            guard key != lastSelectionKey else { return }
+            lastSelectionKey = key
+
+            logger.debug("SelectionMonitor: selection '\(text.prefix(40))' at \(range.location)+\(range.length)")
+            onSelectionChanged?(text, range, bounds)
         }
-
-        // Only fire if the selection actually changed.
-        let key = "\(range.location):\(range.length)"
-        guard key != lastSelectionKey else { return }
-        lastSelectionKey = key
-
-        logger.debug("SelectionMonitor: selection '\(text.prefix(40))' at \(range.location)+\(range.length)")
-        onSelectionChanged?(text, range, bounds)
     }
 
     // MARK: - AX Read (background, nonisolated) — uses AXHelper (#020)
 
-    private nonisolated static func readSelection() -> (String, NSRange, CGRect)? {
+    private nonisolated static func readSelection() -> ReadSelectionResult {
         // Skip elements belonging to this process (WriteAssist's own popover).
-        guard let element = AXHelper.focusedElement(skipSelf: true) else { return nil }
+        guard let element = AXHelper.focusedElement(skipSelf: true) else { return .none }
+        guard AXHelper.isSafeToInspect(element) else { return .secureContext }
 
         // Read selected text.
-        guard let text = AXHelper.selectedText(of: element) else { return nil }
+        guard let text = AXHelper.selectedText(of: element) else { return .none }
 
         // Read selected range as AXValue.
-        guard let rangeRef = AXHelper.selectedRangeRef(of: element) else { return nil }
+        guard let rangeRef = AXHelper.selectedRangeRef(of: element) else { return .none }
 
         var cfRange = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &cfRange) else { return nil }
+        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &cfRange) else { return .none }
         let nsRange = NSRange(location: cfRange.location, length: cfRange.length)
 
         // Read screen bounds for panel positioning (best-effort; use .zero on failure).
         let bounds = AXHelper.bounds(for: rangeRef, in: element) ?? .zero
 
-        return (text, nsRange, bounds)
+        return .selection(text, nsRange, bounds)
     }
 }

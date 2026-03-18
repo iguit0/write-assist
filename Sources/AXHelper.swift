@@ -2,12 +2,19 @@
 // Copyright © 2025 Igor Alves. All rights reserved.
 
 import AppKit
+import Carbon.HIToolbox
 
 /// Shared Accessibility API utilities. All functions are `nonisolated static` so they
 /// can be called from background threads and detached tasks without actor hopping.
 /// Each function encapsulates the repetitive "get focused element → guard type →
 /// read attribute" pattern that was duplicated across 4+ call sites (#020).
 enum AXHelper {
+    enum InspectionDecision: Equatable {
+        case allow
+        case denySecureInput
+        case denySecureField
+    }
+
     // MARK: - Focused Element
 
     /// Returns the currently focused `AXUIElement`, or `nil` on any failure.
@@ -33,6 +40,45 @@ enum AXHelper {
         }
 
         return element
+    }
+
+    // MARK: - Security Context
+
+    nonisolated static func inspectionDecision(
+        secureInputEnabled: Bool,
+        role: String?,
+        subrole: String?
+    ) -> InspectionDecision {
+        if secureInputEnabled {
+            return .denySecureInput
+        }
+        if subrole == kAXSecureTextFieldSubrole as String {
+            return .denySecureField
+        }
+        if let subrole, subrole.localizedCaseInsensitiveContains("secure")
+            || subrole.localizedCaseInsensitiveContains("password") {
+            return .denySecureField
+        }
+        if let role, role.localizedCaseInsensitiveContains("password") {
+            return .denySecureField
+        }
+        return .allow
+    }
+
+    nonisolated static var isSecureInputEnabled: Bool {
+        IsSecureEventInputEnabled()
+    }
+
+    nonisolated static func inspectionDecision(for element: AXUIElement) -> InspectionDecision {
+        inspectionDecision(
+            secureInputEnabled: isSecureInputEnabled,
+            role: attributeString(kAXRoleAttribute as CFString, of: element),
+            subrole: attributeString(kAXSubroleAttribute as CFString, of: element)
+        )
+    }
+
+    nonisolated static func isSafeToInspect(_ element: AXUIElement) -> Bool {
+        inspectionDecision(for: element) == .allow
     }
 
     // MARK: - String Value
@@ -126,6 +172,19 @@ enum AXHelper {
               let ref,
               let str = ref as? String
         else { return nil }
+        return str
+    }
+
+    // MARK: - Generic Attribute Reads
+
+    private nonisolated static func attributeString(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &ref) == .success,
+              let ref,
+              let str = ref as? String else { return nil }
         return str
     }
 }

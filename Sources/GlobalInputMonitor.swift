@@ -40,6 +40,9 @@ public final class GlobalInputMonitor {
     /// Fires when Accessibility permission changes (granted or revoked).
     var onAccessibilityPermissionChanged: ((Bool) -> Void)?
 
+    /// Fires when input capture is suppressed because the focused field is secure.
+    var onSecureContextDetected: (() -> Void)?
+
     // MARK: - Polling Timer
 
     private var permissionTimer: Timer?
@@ -119,6 +122,18 @@ public final class GlobalInputMonitor {
     // MARK: - Event Handling
 
     private func handle(event: NSEvent) {
+        if AXHelper.isSecureInputEnabled {
+            clearBufferForSecureContext(reason: "secure input enabled")
+            onSecureContextDetected?()
+            return
+        }
+        if let focusedElement = AXHelper.focusedElement(skipSelf: true),
+           !AXHelper.isSafeToInspect(focusedElement) {
+            clearBufferForSecureContext(reason: "secure field focused")
+            onSecureContextDetected?()
+            return
+        }
+
         let modifiers = event.modifierFlags.intersection([.command, .control, .option])
 
         // ── Track text-modifying shortcuts ────────────────────────────────────
@@ -240,6 +255,12 @@ public final class GlobalInputMonitor {
         }
 
         viewModel?.textDidChange(buffer)
+    }
+
+    private func clearBufferForSecureContext(reason: String) {
+        logger.debug("handle: \(reason, privacy: .public) — clearing buffer")
+        buffer.removeAll(keepingCapacity: true)
+        viewModel?.textDidChange("")
     }
 
     // MARK: - Buffer

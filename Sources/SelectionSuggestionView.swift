@@ -47,7 +47,7 @@ struct SelectionSuggestionView: View {
         .padding(2) // prevents shadow clipping
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Rewrite suggestions")
-        .accessibilityHint("Use the tabs to choose a style, then press Accept to apply")
+        .accessibilityHint("Use the tabs to generate a rewrite, then press Accept to apply")
     }
 
     // MARK: - Tab Bar
@@ -123,13 +123,16 @@ struct SelectionSuggestionView: View {
     }
 
     private var loadingView: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-                .scaleEffect(0.8)
-            Text(state.activeTab.loadingLabel)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.8)
+                Text(state.activeTab.loadingLabel)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            cloudDisclosure
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -192,10 +195,13 @@ struct SelectionSuggestionView: View {
     }
 
     private var emptyStateView: some View {
-        Text("Select a style above to rewrite your text.")
-            .font(.system(size: 12))
-            .foregroundStyle(.tertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Click a style above to generate a rewrite.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            cloudDisclosure
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Action Row
@@ -223,5 +229,12 @@ struct SelectionSuggestionView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var cloudDisclosure: some View {
+        Text("Uses your configured AI provider only after you click a style.")
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

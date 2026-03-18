@@ -421,13 +421,8 @@ struct MenuBarPopoverView: View {
                     Divider()
                     TextSelectionSuggestionsPanel(
                         selectedText: selectedText,
-                        onApply: { suggestion in
-                            // Write to clipboard so the user can paste the suggestion.
-                            // Full in-place replacement requires AX write-back which is
-                            // handled by the system-wide SelectionSuggestionPanel; this
-                            // in-popover panel serves the WriteAssist text preview only.
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(suggestion, forType: .string)
+                        onCopy: { suggestion in
+                            PasteboardTransaction.write(suggestion)
                             selectedTextForSuggestions = nil
                         },
                         onDismiss: {
@@ -1170,6 +1165,10 @@ struct SettingsPanel: View {
                     }
                 }
             }
+
+            Text("Cloud AI runs only when you explicitly request suggestions or rewrites. Passive spell checks stay local.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -1424,14 +1423,14 @@ struct StatsView: View {
 
 struct TextSelectionSuggestionsPanel: View {
     let selectedText: String
-    let onApply: (String) -> Void
+    let onCopy: (String) -> Void
     let onDismiss: () -> Void
 
     @State private var aiService = CloudAIService.shared
     @State private var suggestions: [String] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var appliedSuggestion: String?
+    @State private var copiedSuggestion: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1485,13 +1484,17 @@ struct TextSelectionSuggestionsPanel: View {
                     .padding(.vertical, 8)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
+                    Text("Click a suggestion to copy it. Passive spell checks stay local.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4)
                     ForEach(suggestions.prefix(3), id: \.self) { suggestion in
                         SuggestionButton(
                             suggestion: suggestion,
-                            isApplied: appliedSuggestion == suggestion,
+                            isApplied: copiedSuggestion == suggestion,
                             onTap: {
-                                appliedSuggestion = suggestion
-                                onApply(suggestion)
+                                copiedSuggestion = suggestion
+                                onCopy(suggestion)
                                 Task { @MainActor in
                                     try? await Task.sleep(for: .milliseconds(800))
                                     onDismiss()

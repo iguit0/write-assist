@@ -111,7 +111,10 @@ final class SelectionSuggestionPanel {
     /// `true` while the panel is on screen.
     var isVisible: Bool { panel != nil }
 
-    /// Show the panel near `caretBounds`, loading the Improve tab suggestion immediately.
+    var hasPendingLoadsForTesting: Bool { !loadingTasks.isEmpty }
+    var stateForTesting: SelectionSuggestionState? { state }
+
+    /// Show the panel near `caretBounds`.
     func show(selectedText: String, range: NSRange, near caretBounds: CGRect) {
         let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -164,8 +167,6 @@ final class SelectionSuggestionPanel {
             }
 
             presentPanel(hostingView: hostingView, size: panelSize, origin: origin)
-            // Auto-load the first tab so content appears immediately.
-            loadTab(.improve, state: panelState)
         }
     }
 

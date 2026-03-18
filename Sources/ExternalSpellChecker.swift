@@ -143,6 +143,7 @@ final class ExternalSpellChecker {
     private nonisolated static func readWordBeforeCursor() -> (String, NSRange, CGRect)? {
         // Skip WriteAssist's own text fields — DocumentViewModel handles those.
         guard let element = AXHelper.focusedElement(skipSelf: true) else { return nil }
+        guard AXHelper.isSafeToInspect(element) else { return nil }
 
         // Get the cursor position via AXHelper.
         guard let rangeRef = AXHelper.selectedRangeRef(of: element) else { return nil }
