@@ -13,24 +13,35 @@ final class PersonalDictionary: @unchecked Sendable {
 
     private(set) var words: [String] = []
     private let storageKey = "personalDictionaryWords"
+    private let fileURL = PersonalDictionary.dictionaryFileURL
+
+    private static let dictionaryFileURL: URL? = {
+        let fileManager = FileManager.default
+        guard let appSupportBase = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return nil }
+
+        let appSupportDir = appSupportBase.appendingPathComponent("WriteAssist", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+            return appSupportDir.appendingPathComponent("personal-dictionary.json", isDirectory: false)
+        } catch {
+            logger.error("Failed to create Application Support dir: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }()
 
     private init() {
-        // Load from UserDefaults and migrate to lowercase for case-insensitive lookup
-        let loaded = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
-        var seen = Set<String>()
-        var migrated: [String] = []
-        for word in loaded {
-            let lower = word.lowercased()
-            if seen.insert(lower).inserted {
-                migrated.append(lower)
-            }
-        }
-        words = migrated.sorted()
-        // Persist migration if any words changed casing or were deduplicated
-        if migrated.count != loaded.count || zip(migrated, loaded).contains(where: { $0 != $1 }) {
-            UserDefaults.standard.set(words, forKey: storageKey)
-        }
-        // Ensure all words are learned by NSSpellChecker
+        // Canonical source can come from either UserDefaults or persisted file.
+        // This helps survive app reinstalls where defaults may be wiped.
+        let defaultsWords = UserDefaults.standard.stringArray(forKey: storageKey) ?? []
+        let fileWords = loadWordsFromFile()
+
+        words = Self.normalized(defaultsWords + fileWords)
+        persist()
+
+        // Ensure all canonical words are learned by NSSpellChecker.
         let checker = NSSpellChecker.shared
         for word in words {
             checker.learnWord(word)
@@ -41,9 +52,11 @@ final class PersonalDictionary: @unchecked Sendable {
     func addWord(_ word: String) {
         let lower = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !lower.isEmpty, !words.contains(lower) else { return }
+
         words.append(lower)
-        words.sort()
-        save()
+        words = Self.normalized(words)
+        persist()
+
         NSSpellChecker.shared.learnWord(lower)
         logger.info("Learned word: '\(lower)'")
     }
@@ -51,7 +64,8 @@ final class PersonalDictionary: @unchecked Sendable {
     func removeWord(_ word: String) {
         let lower = word.lowercased()
         words.removeAll { $0 == lower }
-        save()
+        persist()
+
         NSSpellChecker.shared.unlearnWord(lower)
         logger.info("Unlearned word: '\(lower)'")
     }
@@ -60,7 +74,43 @@ final class PersonalDictionary: @unchecked Sendable {
         words.contains(word.lowercased())
     }
 
-    private func save() {
+    private func persist() {
         UserDefaults.standard.set(words, forKey: storageKey)
+        saveWordsToFile(words)
+    }
+
+    private func loadWordsFromFile() -> [String] {
+        guard let fileURL else { return [] }
+        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+            logger.error("Failed to decode personal dictionary file at \(fileURL.path, privacy: .public)")
+            return []
+        }
+        return decoded
+    }
+
+    private func saveWordsToFile(_ words: [String]) {
+        guard let fileURL else { return }
+        do {
+            let data = try JSONEncoder().encode(words)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            logger.error("Failed to save personal dictionary file: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private static func normalized(_ input: [String]) -> [String] {
+        var seen = Set<String>()
+        var output: [String] = []
+
+        for word in input {
+            let lower = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !lower.isEmpty else { continue }
+            if seen.insert(lower).inserted {
+                output.append(lower)
+            }
+        }
+
+        return output.sorted()
     }
 }
