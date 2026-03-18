@@ -16,6 +16,7 @@ private let logger = Logger(subsystem: "com.writeassist", category: "StatusBarCo
 @MainActor
 public final class StatusBarController: NSObject, @unchecked Sendable {
 
+    private let keyEventRouter: GlobalKeyEventRouter
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var eventMonitor: Any?
@@ -25,20 +26,22 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
     private var selectionMonitor: SelectionMonitor?
     private var externalSpellChecker: ExternalSpellChecker?
     private var isAnimating = false
-    private var hotkeyEventTap: CFMachPort?
-    private var hotkeyMonitor: Any?
+    private var hotkeyHandlerToken: GlobalKeyHandlerToken?
 
     // MARK: - Setup
 
     private weak var viewModel: DocumentViewModel?
     private var badgeObserver: Task<Void, Never>?
 
-    public override init() { super.init() }
+    public override init() {
+        self.keyEventRouter = .shared
+        super.init()
+    }
 
     public func setup(viewModel: DocumentViewModel, inputMonitor: GlobalInputMonitor) {
         self.viewModel = viewModel
-        hudPanel = ErrorHUDPanel()
-        selectionPanel = SelectionSuggestionPanel(viewModel: viewModel)
+        hudPanel = ErrorHUDPanel(keyEventRouter: keyEventRouter)
+        selectionPanel = SelectionSuggestionPanel(viewModel: viewModel, keyEventRouter: keyEventRouter)
         undoToastPanel = UndoToastPanel()
 
         // Create the status bar item — use variableLength so the button
@@ -407,25 +410,24 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
     // MARK: - Global Hotkey (Cmd+Shift+G)
 
     private func registerGlobalHotkey() {
-        // Use NSEvent global monitor for key combinations
-        // Cmd+Shift+G to toggle the popover
-        hotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-            // Cmd+Shift+G: keyCode 5 = G
-            if flags == [.command, .shift] && event.keyCode == 5 {
-                Task { @MainActor in
-                    self?.togglePopover()
-                }
+        hotkeyHandlerToken = keyEventRouter.register(priority: 400) { [weak self] event in
+            if event.modifiers == [.command, .shift], event.keyCode == 5 {
+                self?.hudPanel?.dismiss()
+                self?.selectionPanel?.dismiss()
+                self?.undoToastPanel?.dismiss()
+                self?.togglePopover()
+                return true
             }
+            return false
         }
         logger.info("Global hotkey registered: Cmd+Shift+G")
     }
 
     private func unregisterGlobalHotkey() {
-        if let monitor = hotkeyMonitor {
-            NSEvent.removeMonitor(monitor)
+        if let hotkeyHandlerToken {
+            keyEventRouter.unregister(hotkeyHandlerToken)
         }
-        hotkeyMonitor = nil
+        hotkeyHandlerToken = nil
         logger.debug("Global hotkey unregistered")
     }
 }

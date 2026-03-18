@@ -13,6 +13,7 @@ private let logger = Logger(subsystem: "com.writeassist", category: "ErrorHUDPan
 /// Dismisses when the user types, clicks a suggestion, or clicks Ignore/×.
 @MainActor
 final class ErrorHUDPanel {
+    private let keyEventRouter: GlobalKeyEventRouter
     private var panel: NSPanel?
 
     /// Incremented on each `show()` call so an in-flight async position query
@@ -28,8 +29,8 @@ final class ErrorHUDPanel {
 
     private var keyboardState: HUDKeyboardState?
 
-    /// Global key event monitor, active only while the HUD panel is visible.
-    private var keyMonitor: Any?
+    /// Global key event handler token, active only while the HUD panel is visible.
+    private var keyHandlerToken: GlobalKeyHandlerToken?
 
     /// Observer used to dismiss the HUD when the active application changes.
     private var appSwitchObserver: NSObjectProtocol?
@@ -44,6 +45,10 @@ final class ErrorHUDPanel {
     private var onDismissCallback: (() -> Void)?
     private var onAddToDictionaryCallback: (() -> Void)?
     private var currentSuggestions: [String] = []
+
+    init(keyEventRouter: GlobalKeyEventRouter = .shared) {
+        self.keyEventRouter = keyEventRouter
+    }
 
     // MARK: - Public API
 
@@ -179,19 +184,17 @@ final class ErrorHUDPanel {
         removeKeyMonitor()
         isAcceptingKeyboardInput = true
 
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            Task { @MainActor in
-                self?.handleKeyEvent(event)
-            }
+        keyHandlerToken = keyEventRouter.register(priority: 250) { [weak self] event in
+            self?.handleKeyEvent(event) ?? false
         }
         logger.debug("installKeyMonitor: keyboard navigation active")
     }
 
     private func removeKeyMonitor() {
-        if let monitor = keyMonitor {
-            NSEvent.removeMonitor(monitor)
-            keyMonitor = nil
+        if let keyHandlerToken {
+            keyEventRouter.unregister(keyHandlerToken)
         }
+        keyHandlerToken = nil
         isAcceptingKeyboardInput = false
     }
 
@@ -215,14 +218,12 @@ final class ErrorHUDPanel {
         }
     }
 
-    private func handleKeyEvent(_ event: NSEvent) {
-        // Any modifier shortcut (Cmd/Ctrl/Option) should dismiss the HUD and let
-        // the key pass through to the editor.
-        let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+    private func handleKeyEvent(_ event: GlobalKeyEvent) -> Bool {
+        let modifiers = event.modifiers.intersection([.command, .control, .option])
         guard modifiers.isEmpty else {
             logger.debug("handleKeyEvent: modifier shortcut — dismissing")
             dismiss()
-            return
+            return false
         }
 
         let keyCode = event.keyCode
@@ -231,10 +232,12 @@ final class ErrorHUDPanel {
         case 125: // Down Arrow
             keyboardState?.moveDown()
             logger.debug("handleKeyEvent: ↓ — selectedIndex=\(self.keyboardState?.selectedIndex ?? -1)")
+            return true
 
         case 126: // Up Arrow
             keyboardState?.moveUp()
             logger.debug("handleKeyEvent: ↑ — selectedIndex=\(self.keyboardState?.selectedIndex ?? -1)")
+            return true
 
         case 36, 76: // Return / Enter
             if let kbs = keyboardState {
@@ -252,10 +255,12 @@ final class ErrorHUDPanel {
                     onApplyCallback?(suggestion)
                 }
             }
+            return true
 
         case 53: // Escape
             logger.debug("handleKeyEvent: esc — dismissing")
             onDismissCallback?()
+            return true
 
         default:
             // Check for character shortcuts
@@ -271,25 +276,28 @@ final class ErrorHUDPanel {
                             logger.debug("handleKeyEvent: 'r' — triggering AI rewrite")
                             kbs.triggerRewrite?()
                         }
-                    } else {
-                        dismiss()
+                        return true
                     }
+                    dismiss()
+                    return false
                 case "i":
                     logger.debug("handleKeyEvent: 'i' — ignoring issue")
                     onIgnoreCallback?()
+                    return true
                 case "d":
                     if onAddToDictionaryCallback != nil {
                         logger.debug("handleKeyEvent: 'd' — adding to dictionary")
                         onAddToDictionaryCallback?()
-                    } else {
-                        // Not a spelling issue — dismiss and let key pass through
-                        dismiss()
+                        return true
                     }
-                default:
-                    // Non-navigation key — dismiss HUD
                     dismiss()
+                    return false
+                default:
+                    dismiss()
+                    return false
                 }
             }
+            return false
         }
     }
 

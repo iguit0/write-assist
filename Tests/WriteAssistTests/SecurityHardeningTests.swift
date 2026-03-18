@@ -85,7 +85,8 @@ struct SelectionSuggestionPanelTests {
     @Test("show does not auto-load suggestions")
     func showDoesNotAutoLoadSuggestions() async throws {
         let viewModel = DocumentViewModel()
-        let panel = SelectionSuggestionPanel(viewModel: viewModel)
+        let router = GlobalKeyEventRouter(installSystemMonitor: false)
+        let panel = SelectionSuggestionPanel(viewModel: viewModel, keyEventRouter: router)
 
         panel.show(
             selectedText: "This selected text should wait for an explicit click.",

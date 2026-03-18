@@ -87,12 +87,13 @@ final class SelectionSuggestionState {
 @MainActor
 final class SelectionSuggestionPanel {
 
+    private let keyEventRouter: GlobalKeyEventRouter
     private var panel: NSPanel?
     private var hostingView: NSView?
     private var state: SelectionSuggestionState?
     /// Per-tab loading tasks — prevents cancelling background tabs on switch.
     private var loadingTasks: [SuggestionTab: Task<Void, Never>] = [:]
-    private var keyMonitor: Any?
+    private var keyHandlerToken: GlobalKeyHandlerToken?
     private var appSwitchObserver: NSObjectProtocol?
     private var showGeneration = 0
     private var lastDismissTime: ContinuousClock.Instant?
@@ -102,8 +103,12 @@ final class SelectionSuggestionPanel {
 
     // MARK: - Init
 
-    init(viewModel: DocumentViewModel) {
+    init(
+        viewModel: DocumentViewModel,
+        keyEventRouter: GlobalKeyEventRouter = .shared
+    ) {
         self.viewModel = viewModel
+        self.keyEventRouter = keyEventRouter
     }
 
     // MARK: - Public API
@@ -334,26 +339,30 @@ final class SelectionSuggestionPanel {
 
     private func installKeyMonitor() {
         removeKeyMonitor()
-        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            Task { @MainActor in
-                let modifiers = event.modifierFlags.intersection([.command, .control, .option])
-                guard modifiers.isEmpty else { return }
-                switch event.keyCode {
-                case 53: // Escape
-                    self?.dismiss()
-                case 36, 76: // Return / Enter
-                    self?.applyCurrentSuggestion()
-                default:
-                    break
-                }
-            }
+        keyHandlerToken = keyEventRouter.register(priority: 300) { [weak self] event in
+            self?.handleKeyEvent(event) ?? false
         }
     }
 
     private func removeKeyMonitor() {
-        if let monitor = keyMonitor {
-            NSEvent.removeMonitor(monitor)
-            keyMonitor = nil
+        if let keyHandlerToken {
+            keyEventRouter.unregister(keyHandlerToken)
+        }
+        keyHandlerToken = nil
+    }
+
+    private func handleKeyEvent(_ event: GlobalKeyEvent) -> Bool {
+        let modifiers = event.modifiers.intersection([.command, .control, .option])
+        guard modifiers.isEmpty else { return false }
+        switch event.keyCode {
+        case 53:
+            dismiss()
+            return true
+        case 36, 76:
+            applyCurrentSuggestion()
+            return true
+        default:
+            return false
         }
     }
 
