@@ -4,7 +4,7 @@
 import Foundation
 import SwiftUI
 
-enum IssueType: Sendable {
+public enum IssueType: Sendable {
     case spelling
     case grammar
     case doubleWord
@@ -91,7 +91,7 @@ enum IssueType: Sendable {
     }
 }
 
-enum IssueCategory: String, CaseIterable, Sendable {
+public enum IssueCategory: String, CaseIterable, Sendable {
     case correctness = "Correctness"
     case clarity = "Clarity"
     case engagement = "Engagement"
@@ -107,16 +107,16 @@ enum IssueCategory: String, CaseIterable, Sendable {
     }
 }
 
-struct WritingIssue: Identifiable, Sendable {
-    let type: IssueType
-    let ruleID: String
-    let range: NSRange
-    let word: String
-    let message: String
-    let suggestions: [String]
+public struct WritingIssue: Identifiable, Sendable {
+    public let type: IssueType
+    public let ruleID: String
+    public let range: NSRange
+    public let word: String
+    public let message: String
+    public let suggestions: [String]
 
     /// Stable identity so SwiftUI diffing/caches don't churn on every re-check.
-    var id: String {
+    public var id: String {
         "\(ruleID):\(range.location):\(range.length):\(word.lowercased())"
     }
 }

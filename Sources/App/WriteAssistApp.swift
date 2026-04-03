@@ -9,8 +9,6 @@ struct WriteAssistApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Menu-bar-only app: no main window.
-        // Settings scene prevents "No scene found" warning but is never shown.
         Settings {
             EmptyView()
         }
@@ -19,18 +17,23 @@ struct WriteAssistApp: App {
 
 // MARK: - AppDelegate
 
-// Note: Not marked @MainActor at the class level to satisfy nonisolated
-// protocol requirements in Swift 6. Individual stored objects are created
-// on first access which is always on the main thread from NSApplicationDelegate.
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    // These are created lazily on first use, always on the main thread.
+    // New workbench shell
+    private var shell: AppShellController?
+
+    // Legacy inline path — kept compilable during migration
     private var viewModel: DocumentViewModel?
     private var statusBarController: StatusBarController?
     private var inputMonitor: GlobalInputMonitor?
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // --- New workbench shell ---
+        let shellController = AppShellController(mode: .reviewWorkbenchHybrid)
+        shell = shellController
+
+        // --- Legacy inline path (kept compilable, still the active UI for now) ---
         let vm = DocumentViewModel()
         let monitor = GlobalInputMonitor(viewModel: vm)
         let controller = StatusBarController()
@@ -39,23 +42,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputMonitor = monitor
         statusBarController = controller
 
-        // Wire the input monitor reference so DocumentViewModel can update
-        // the buffer after applying a correction (prevents re-detecting corrected words).
         vm.inputMonitor = monitor
 
-        // Set up status bar item + popover FIRST, then hide Dock icon.
-        // Setting activation policy before creating the NSStatusItem can
-        // prevent the item from appearing in some macOS configurations.
+        // Legacy popover setup — still active in .reviewWorkbenchHybrid mode.
+        // setupLauncher(onOpenReview:onReviewSelection:onOpenSettings:) exists on StatusBarController
+        // and will replace this call when the workbench window becomes the primary surface (Phase 2).
         controller.setup(viewModel: vm, inputMonitor: monitor)
 
-        // Hide Dock icon — must happen after status item is created
-        // so macOS knows the app has a presence in the UI.
         NSApp.setActivationPolicy(.accessory)
 
-        // Start monitoring if permission already granted
         if monitor.hasAccessibilityPermission {
             monitor.startMonitoring()
         }
+
+        shellController.start(statusBarController: controller)
     }
 
     @MainActor
@@ -64,5 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputMonitor?.cleanup()
         inputMonitor?.stopMonitoring()
         statusBarController?.teardown()
+        shell?.stop()
     }
 }

@@ -119,8 +119,8 @@ final class SelectionSuggestionPanel {
     var hasPendingLoadsForTesting: Bool { !loadingTasks.isEmpty }
     var stateForTesting: SelectionSuggestionState? { state }
 
-    /// Show the panel near `caretBounds`.
-    func show(selectedText: String, range: NSRange, near caretBounds: CGRect) {
+    /// Show the panel near the given text selection bounds.
+    func show(selectedText: String, range: NSRange, near selectionBounds: CGRect) {
         let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -160,8 +160,8 @@ final class SelectionSuggestionPanel {
             guard let self, showGeneration == generation else { return }
 
             let origin: NSPoint
-            if caretBounds != .zero {
-                origin = Self.caretAnchoredOrigin(caretBounds: caretBounds, panelSize: panelSize)
+            if selectionBounds != .zero {
+                origin = Self.caretAnchoredOrigin(caretBounds: selectionBounds, panelSize: panelSize)
             } else {
                 // Fallback: query caret bounds asynchronously.
                 let asyncBounds = await Self.queryCaretBoundsAsync()

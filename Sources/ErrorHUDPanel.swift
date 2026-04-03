@@ -53,10 +53,14 @@ final class ErrorHUDPanel {
     // MARK: - Public API
 
     /// Show the inline suggestion popup anchored near the text cursor.
-    /// Queries caret bounds via Accessibility on a background thread, then
-    /// positions the panel just below the caret. Falls back to the top-right
+    /// Positions the panel just below the caret. Falls back to the top-right
     /// corner of the screen if the AX query fails.
-    func show(issue: WritingIssue, viewModel: DocumentViewModel) {
+    ///
+    /// - Parameters:
+    ///   - anchorBounds: Pre-computed AX bounds from `ExternalSpellChecker`. When
+    ///     provided and non-zero, skips the redundant async AX query inside this
+    ///     method. Pass `nil` (or omit) to let the method query the caret itself.
+    func show(issue: WritingIssue, anchorBounds: CGRect? = nil, viewModel: DocumentViewModel) {
         // ── Keyboard navigation gate ─────────────────────────────────────────
         // Don't tear down the panel while the user is navigating suggestions
         // with arrow keys. GlobalInputMonitor still calls textDidChange on
@@ -151,9 +155,18 @@ final class ErrorHUDPanel {
 
         // Query the text caret position off the main thread, then present.
         Task { @MainActor [weak self] in
-            logger.debug("show: querying caret bounds async")
-            let caretBounds = await Self.queryCaretBoundsAsync()
-            logger.debug("show: caret query returned (has bounds: \(caretBounds != nil))")
+            // Use pre-computed bounds from ExternalSpellChecker when available —
+            // they point at the misspelled word (better UX anchor) and avoid a
+            // second AX query that could race or return a stale element.
+            let resolvedBounds: CGRect?
+            if let anchorBounds, anchorBounds != .zero {
+                logger.debug("show: using pre-computed anchor bounds")
+                resolvedBounds = anchorBounds
+            } else {
+                logger.debug("show: querying caret bounds async")
+                resolvedBounds = await Self.queryCaretBoundsAsync()
+                logger.debug("show: caret query returned (has bounds: \(resolvedBounds != nil))")
+            }
             guard let self, self.showGeneration == generation else {
                 logger.debug("show: stale generation — aborting")
                 return
@@ -165,8 +178,8 @@ final class ErrorHUDPanel {
             }
 
             let origin: NSPoint
-            if let caretBounds {
-                origin = Self.caretAnchoredOrigin(caretBounds: caretBounds, hudSize: hudSize)
+            if let resolvedBounds {
+                origin = Self.caretAnchoredOrigin(caretBounds: resolvedBounds, hudSize: hudSize)
             } else {
                 origin = Self.topRightFallbackOrigin(hudSize: hudSize)
             }

@@ -3,29 +3,29 @@
 
 import Foundation
 
-struct DocumentIssueSummary: Sendable, Equatable {
-    let spelling: Int
-    let grammar: Int
-    let clarity: Int
-    let engagement: Int
-    let delivery: Int
-    let total: Int
+public struct DocumentIssueSummary: Sendable, Equatable {
+    public let spelling: Int
+    public let grammar: Int
+    public let clarity: Int
+    public let engagement: Int
+    public let delivery: Int
+    public let total: Int
 }
 
-struct DocumentMetrics: Sendable, Equatable {
-    let wordCount: Int
-    let characterCount: Int
-    let sentenceCount: Int
-    let averageSentenceLength: Double
-    let paragraphCount: Int
-    let vocabularyDiversity: Double
-    let averageWordLength: Double
-    let readabilityScore: Double
-    let readingTime: Double
-    let speakingTime: Double
-    let detectedTone: DetectedTone
-    let writingScore: Int
-    let issueSummary: DocumentIssueSummary
+public struct DocumentMetrics: Sendable, Equatable {
+    public let wordCount: Int
+    public let characterCount: Int
+    public let sentenceCount: Int
+    public let averageSentenceLength: Double
+    public let paragraphCount: Int
+    public let vocabularyDiversity: Double
+    public let averageWordLength: Double
+    public let readabilityScore: Double
+    public let readingTime: Double
+    public let speakingTime: Double
+    public let detectedTone: DetectedTone
+    public let writingScore: Int
+    public let issueSummary: DocumentIssueSummary
 
     static func build(text: String, analysis: NLAnalysis?, issues: [WritingIssue]) -> DocumentMetrics {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

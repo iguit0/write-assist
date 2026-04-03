@@ -4,7 +4,7 @@
 import Foundation
 import NaturalLanguage
 
-enum DetectedTone: String, Sendable {
+public enum DetectedTone: String, Sendable {
     case confident = "Confident"
     case tentative = "Tentative"
     case formal = "Formal"
@@ -61,7 +61,7 @@ enum NLAnalysisService {
     // Cached NL processors — allocated once and reused across analysis calls.
     // Allocation cost: 50-200ms on first use (framework lazy-loads CoreNLP models).
     // Protected by `nlLock` because NLTokenizer/NLTagger are not thread-safe.
-    // In production, DocumentViewModel's 200ms debounce ensures serial access.
+    // In production, callers use either DocumentViewModel's debounce or DeterministicReviewEngine's Task.detached to ensure non-concurrent access.
     // In tests, the lock prevents concurrent calls from corrupting string indices.
     private static let nlLock = NSLock()
     private nonisolated(unsafe) static let sentenceTokenizer = NLTokenizer(unit: .sentence)
