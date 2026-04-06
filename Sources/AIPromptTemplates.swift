@@ -4,6 +4,7 @@
 import Foundation
 
 enum AIRewriteStyle: String, CaseIterable, Sendable {
+    case grammarFix = "Fix Grammar"
     case clearer = "Make clearer"
     case concise = "Make more concise"
     case formal = "Make more formal"
@@ -12,6 +13,8 @@ enum AIRewriteStyle: String, CaseIterable, Sendable {
 
     var instruction: String {
         switch self {
+        case .grammarFix:
+            return "Fix all grammar, spelling, punctuation, and sentence-structure errors. Preserve the original wording, style, and meaning as closely as possible — only correct what is grammatically wrong."
         case .clearer:
             return "Rewrite this text to be clearer and easier to understand. Preserve the original meaning, tone, and approximate length."
         case .concise:

@@ -1,4 +1,8 @@
 [PRD]
+> **Status:** Historical / superseded.
+> This MVP PRD no longer reflects the intended product direction.
+> Follow `tasks/prd-writeassist-review-workbench.md` for the current source of truth.
+
 # PRD: WriteAssist (macOS MVP)
 
 ## Overview

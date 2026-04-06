@@ -253,6 +253,46 @@ final class CloudAIService: @unchecked Sendable {
 
     // MARK: - Smart Suggestions
 
+    /// Rewrite `text` using `style` via an explicitly specified `provider`, bypassing `self.provider`.
+    /// Returns the rewritten text and the model name that produced it.
+    /// Used by `LocalFirstRewriteEngine` to implement local-first provider dispatch.
+    func rewriteWithProvider(
+        _ provider: AIProvider,
+        text: String,
+        style: AIRewriteStyle
+    ) async throws -> (text: String, modelName: String) {
+        let prefs = PreferencesManager.shared
+        let (system, user) = AIPromptTemplates.rewritePrompt(
+            text: text, style: style,
+            formality: prefs.formalityLevel,
+            audience: prefs.audienceLevel
+        )
+        switch provider {
+        case .ollama:
+            guard isOllamaURLSafe else { throw CloudAIError.ollamaURLNotSafe }
+            let service = makeOllamaService()
+            let result = try await service.complete(prompt: user, systemPrompt: system)
+            let model = ollamaModelName.isEmpty ? "ollama" : ollamaModelName
+            return (result, model)
+        case .anthropic:
+            guard let key = apiKeyForProvider(.anthropic) else { throw CloudAIError.noAPIKey }
+            let result = try await callAnthropic(key: key, prompt: user, systemPrompt: system)
+            return (result, prefs.anthropicModelName)
+        case .openai:
+            guard let key = apiKeyForProvider(.openai) else { throw CloudAIError.noAPIKey }
+            let result = try await callOpenAI(key: key, prompt: user, systemPrompt: system)
+            return (result, prefs.openAIModelName)
+        }
+    }
+
+    private func apiKeyForProvider(_ provider: AIProvider) -> String? {
+        switch provider {
+        case .anthropic: return KeychainHelper.load(key: "anthropic_api_key")
+        case .openai:    return KeychainHelper.load(key: "openai_api_key")
+        case .ollama:    return nil
+        }
+    }
+
     func smartSuggestions(for issue: WritingIssue, context: String) async throws -> [String] {
         let (system, user) = AIPromptTemplates.smartSuggestionPrompt(
             text: context, issueMessage: issue.message

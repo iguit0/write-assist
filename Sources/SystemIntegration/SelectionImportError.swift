@@ -10,3 +10,20 @@ public enum SelectionImportError: Error, Sendable {
     case noSelection
     case unsupportedElement
 }
+
+extension SelectionImportError {
+    public var userFacingMessage: String {
+        switch self {
+        case .accessibilityDenied:
+            return "WriteAssist needs Accessibility permission. Enable it in System Settings → Privacy & Security → Accessibility."
+        case .secureContext:
+            return "The focused field is secure (e.g. a password field) and cannot be imported."
+        case .noFocusedElement:
+            return "No text field is focused. Click inside a text field in another app, then try Review Selection."
+        case .noSelection:
+            return "No text is selected. Select some text in another app, then try Review Selection."
+        case .unsupportedElement:
+            return "The focused element does not support text selection."
+        }
+    }
+}

@@ -1,5 +1,5 @@
 // WriteAssist — macOS menu bar writing assistant
-// Copyright © 2024 Igor Alves. All rights reserved.
+// Copyright © 2025 Igor Alves. All rights reserved.
 
 import Foundation
 
@@ -12,6 +12,17 @@ public enum RewriteTarget: Sendable, Equatable {
     case sentence(id: String, range: NSRange)
     case paragraph(id: String, range: NSRange)
     case customSelection(range: NSRange)
+}
+
+extension RewriteTarget {
+    /// Extracts the `NSRange` from any target variant.
+    var nsRange: NSRange {
+        switch self {
+        case .sentence(_, let range): return range
+        case .paragraph(_, let range): return range
+        case .customSelection(let range): return range
+        }
+    }
 }
 
 public struct RewriteRequest: Identifiable, Sendable {

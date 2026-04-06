@@ -1,5 +1,8 @@
 // WriteAssist — macOS menu bar writing assistant
 // Copyright © 2025 Igor Alves. All rights reserved.
+// LEGACY — Non-primary. This file belongs to the ambient inline-monitor path, which is
+// superseded by the Review Workbench (reviewWorkbenchOnly mode). No new product behavior
+// should be added here. New work goes into Sources/SystemIntegration/ (one-shot import).
 
 @preconcurrency import AppKit
 import os

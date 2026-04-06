@@ -24,8 +24,8 @@ public final class AppShellController {
     // MARK: - Init
 
     public init(
-        mode: AppMode = .reviewWorkbenchHybrid,
-        selectionImporter: any SelectionImporting = PlaceholderSelectionImportService()
+        mode: AppMode = .reviewWorkbenchOnly,
+        selectionImporter: any SelectionImporting = SelectionImportService()
     ) {
         self.mode = mode
         self.reviewStore = ReviewSessionStore()
@@ -54,16 +54,16 @@ public final class AppShellController {
         let workbenchView = ReviewWorkbenchView(
             reviewStore: reviewStore,
             rewriteStore: rewriteStore,
-            onReview: {
-                self.reviewStore.requestReview(trigger: .manualReview)
+            onReview: { [weak self] in
+                self?.reviewStore.requestReview(trigger: .manualReview)
             }
         )
         let hostingController = NSHostingController(rootView: workbenchView)
         let window = NSWindow(contentViewController: hostingController)
         window.title = "WriteAssist"
-        window.setContentSize(NSSize(width: 900, height: 600))
+        window.setContentSize(NSSize(width: 960, height: 640))
         window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
-        window.minSize = NSSize(width: 600, height: 400)
+        window.minSize = NSSize(width: 640, height: 440)
         window.center()
         let wc = NSWindowController(window: window)
         reviewWindowController = wc
@@ -71,25 +71,36 @@ public final class AppShellController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // MARK: - Selection import
+    // MARK: - Selection import (RW-502)
 
+    /// Imports the current selection from the focused app, opens the review window,
+    /// and starts a review automatically. Shows an alert on failure.
     public func reviewSelection() async {
         do {
             let imported = try await selectionImporter.importCurrentSelection()
-            applyImportedSelection(imported)
+            openReviewWindow()
+            reviewStore.replaceText(
+                imported.text,
+                source: .importedSelection(imported.metadata),
+                trigger: .importedSelection,
+                autoReview: true
+            )
+        } catch let error as SelectionImportError {
+            showSelectionImportError(error)
         } catch {
-            // Error handling will be wired in Phase 5 (RW-502)
+            showSelectionImportError(.noSelection)
         }
     }
 
+    /// Integration point for external callers (URL scheme, XPC) that have already obtained
+    /// an `ImportedSelection` and need to route it into the workbench without triggering
+    /// the full import flow. For normal "Review Selection" use `reviewSelection()` instead.
     public func applyImportedSelection(_ selection: ImportedSelection) {
-        let metadata = selection.metadata
-        reviewStore.document = ReviewDocument(
-            id: reviewStore.document.id,
-            text: selection.text,
-            source: .importedSelection(metadata),
-            revision: reviewStore.document.revision + 1,
-            updatedAt: Date()
+        reviewStore.replaceText(
+            selection.text,
+            source: .importedSelection(selection.metadata),
+            trigger: .importedSelection,
+            autoReview: true
         )
     }
 
@@ -97,5 +108,16 @@ public final class AppShellController {
 
     public func openSettings() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    // MARK: - Error presentation
+
+    private func showSelectionImportError(_ error: SelectionImportError) {
+        let alert = NSAlert()
+        alert.messageText = "Cannot Review Selection"
+        alert.informativeText = error.userFacingMessage
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

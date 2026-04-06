@@ -1,5 +1,8 @@
 // WriteAssist — macOS menu bar writing assistant
 // Copyright © 2025 Igor Alves. All rights reserved.
+// LEGACY — Non-primary. The AX writeback path in this file belongs to the ambient
+// inline-monitor architecture superseded by the Review Workbench. Local document edits
+// in the workbench go through ReviewSessionStore.applyReplacement(...) instead.
 
 @preconcurrency import AppKit
 import CoreGraphics

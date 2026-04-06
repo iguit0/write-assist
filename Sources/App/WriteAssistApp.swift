@@ -19,43 +19,54 @@ struct WriteAssistApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    // New workbench shell
+    // New workbench shell — primary startup path (RW-601)
     private var shell: AppShellController?
 
-    // Legacy inline path — kept compilable during migration
+    // Legacy inline path — kept compilable for hybrid/fallback mode
     private var viewModel: DocumentViewModel?
     private var statusBarController: StatusBarController?
     private var inputMonitor: GlobalInputMonitor?
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // --- New workbench shell ---
-        let shellController = AppShellController(mode: .reviewWorkbenchHybrid)
+        // Default mode is .reviewWorkbenchOnly (RW-601).
+        // Change to .reviewWorkbenchHybrid or .legacyInline to re-enable the
+        // ambient-monitor inline path during testing/rollback.
+        let shellController = AppShellController(mode: .reviewWorkbenchOnly)
         shell = shellController
 
-        // --- Legacy inline path (kept compilable, still the active UI for now) ---
-        let vm = DocumentViewModel()
-        let monitor = GlobalInputMonitor(viewModel: vm)
         let controller = StatusBarController()
-
-        viewModel = vm
-        inputMonitor = monitor
         statusBarController = controller
 
-        vm.inputMonitor = monitor
-
-        // Legacy popover setup — still active in .reviewWorkbenchHybrid mode.
-        // setupLauncher(onOpenReview:onReviewSelection:onOpenSettings:) exists on StatusBarController
-        // and will replace this call when the workbench window becomes the primary surface (Phase 2).
-        controller.setup(viewModel: vm, inputMonitor: monitor)
-
-        NSApp.setActivationPolicy(.accessory)
-
-        if monitor.hasAccessibilityPermission {
-            monitor.startMonitoring()
+        if shellController.mode == .reviewWorkbenchOnly {
+            // --- Review Workbench path (default) ---
+            // Launcher-only menu bar: no ambient monitors, no spell-check panels.
+            controller.setupLauncher(
+                onOpenReview: { [weak shellController] in
+                    shellController?.openReviewWindow()
+                },
+                onReviewSelection: { [weak shellController] in
+                    Task { await shellController?.reviewSelection() }
+                },
+                onOpenSettings: { [weak shellController] in
+                    shellController?.openSettings()
+                }
+            )
+        } else {
+            // --- Legacy inline path (non-primary, gated) ---
+            let vm = DocumentViewModel()
+            let monitor = GlobalInputMonitor(viewModel: vm)
+            viewModel = vm
+            inputMonitor = monitor
+            vm.inputMonitor = monitor
+            controller.setup(viewModel: vm, inputMonitor: monitor)
+            if monitor.hasAccessibilityPermission {
+                monitor.startMonitoring()
+            }
         }
 
         shellController.start(statusBarController: controller)
+        NSApp.setActivationPolicy(.accessory)
     }
 
     @MainActor
