@@ -19,15 +19,11 @@ public final class AppShellController {
     private var statusBarController: StatusBarController?
     private var reviewWindowController: NSWindowController?
 
-    public private(set) var mode: AppMode
-
     // MARK: - Init
 
     public init(
-        mode: AppMode = .reviewWorkbenchOnly,
         selectionImporter: any SelectionImporting = SelectionImportService()
     ) {
-        self.mode = mode
         self.reviewStore = ReviewSessionStore()
         self.rewriteStore = RewriteSessionStore()
         self.selectionImporter = selectionImporter
@@ -71,7 +67,7 @@ public final class AppShellController {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // MARK: - Selection import (RW-502)
+    // MARK: - Selection import
 
     /// Imports the current selection from the focused app, opens the review window,
     /// and starts a review automatically. Shows an alert on failure.

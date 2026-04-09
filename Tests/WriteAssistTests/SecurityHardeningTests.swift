@@ -79,27 +79,4 @@ struct PasteboardTransactionTests {
     }
 }
 
-@Suite("SelectionSuggestionPanel")
-struct SelectionSuggestionPanelTests {
-    @MainActor
-    @Test("show does not auto-load suggestions")
-    func showDoesNotAutoLoadSuggestions() async throws {
-        let viewModel = DocumentViewModel()
-        let router = GlobalKeyEventRouter(installSystemMonitor: false)
-        let panel = SelectionSuggestionPanel(viewModel: viewModel, keyEventRouter: router)
 
-        panel.show(
-            selectedText: "This selected text should wait for an explicit click.",
-            range: NSRange(location: 0, length: 53),
-            near: .zero
-        )
-
-        try await Task.sleep(for: .milliseconds(50))
-
-        #expect(panel.hasPendingLoadsForTesting == false)
-        #expect(panel.stateForTesting?.tabResults.isEmpty == true)
-        #expect(panel.stateForTesting?.loadingTabs.isEmpty == true)
-
-        panel.dismiss()
-    }
-}

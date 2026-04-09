@@ -1,30 +1,37 @@
 # WriteAssist
 
-macOS menu bar writing assistant — offline spelling & grammar checker using NSSpellChecker.
+macOS menu bar writing assistant — review-and-rewrite workbench for non-native English speakers.
 
 ## Build & Lint
 
 - `swift build` — compile (must pass with zero errors/warnings)
 - `swift run` — build and launch (appears as pencil icon in menu bar, not Dock)
 - `swiftlint` — lint (must pass with zero violations)
-- No test target exists yet
+- `swift test` — run unit tests (must pass)
 
 ## Architecture
 
 - **Swift 6 strict concurrency** — uses `@MainActor`, `@preconcurrency import`, `@unchecked Sendable`
-- **MVVM** — `DocumentViewModel` (`@Observable`) is the central hub
-- **AppKit + SwiftUI hybrid** — menu bar popover is SwiftUI; floating HUD, status bar, and global event monitoring are AppKit
-- **Menu bar app** — activation policy `.accessory`, no Dock icon, no main window; `Settings { EmptyView() }` prevents "No scene found" warning
-- **No external dependencies** — SPM project, single executable target
+- **Review Workbench** — primary product surface; a main NSWindow with editor, grouped review results, inspector, and rewrite compare panel
+- **AppKit + SwiftUI hybrid** — review window is SwiftUI hosted in NSWindow; status bar is AppKit
+- **Menu bar as launcher only** — activation policy `.accessory`, no Dock icon; status item opens the review window via NSMenu (no popover)
+- **No external dependencies** — SPM project; `WriteAssistCore` library + thin `WriteAssist` executable
 
 ## Key Patterns
 
-- `GlobalInputMonitor` captures keystrokes via `NSEvent.addGlobalMonitorForEvents`
-- `SpellCheckService` wraps `NSSpellChecker` with 800ms timeout guard
-- `ErrorHUDPanel` is a non-activating `NSPanel` positioned near the text caret via Accessibility API
-- Corrections applied in-place via `AXUIElementSetAttributeValue`; falls back to clipboard + synthetic Cmd+V
+- `AppShellController` owns the review window lifecycle, selection import, and settings routing
+- `ReviewSessionStore` is the single source of truth for the review document, analysis state, and issue/paragraph selection
+- `RewriteSessionStore` owns rewrite targets, candidates, and provider state
+- `DeterministicReviewEngine` wraps `SpellCheckService`, `NLAnalysisService`, `RuleEngine`, and `WritingRules/*`; produces a `ReviewAnalysisSnapshot` keyed by `documentRevision`
+- `SelectionImportService` is a one-shot AX import — no background polling
 - Writing rules in `Sources/WritingRules/` — each is a separate rule file
 - JSON resources in `Sources/Resources/` (excluded from target in Package.swift, loaded at runtime)
+
+## State Ownership
+
+- `ReviewSessionStore` — document text, analysis snapshot, selected issue/paragraph/sentence, analysis lifecycle
+- `RewriteSessionStore` — rewrite target, mode, candidates, provider metadata
+- `AppShellController` — window focus, menu bar lifecycle, selection import entry point
 
 ## Code Style
 
@@ -34,7 +41,12 @@ macOS menu bar writing assistant — offline spelling & grammar checker using NS
 
 ## Project Layout
 
-- `Sources/` — all Swift source files (flat, no subdirectories except WritingRules/)
-- `Sources/WritingRules/` — individual rule implementations
+- `Sources/App/` — executable entry point (`WriteAssistApp`, `AppShellController`)
+- `Sources/ReviewDomain/` — `ReviewDocument`, `ReviewSessionStore`, analysis snapshots
+- `Sources/ReviewServices/` — `DeterministicReviewEngine`, `ReviewGrouping`
+- `Sources/ReviewWindow/` — workbench UI: editor, paragraph list, inspector, rewrite compare
+- `Sources/Rewrite/` — `RewriteEngine`, `LocalFirstRewriteEngine`, `RewriteSessionStore`, request/candidate types
+- `Sources/SystemIntegration/` — one-shot `SelectionImportService`
+- `Sources/WritingRules/` — individual deterministic rule implementations
 - `Sources/Resources/` — JSON data files for rules
-- `tasks/prd-writeassist.md` — product requirements document
+- `tasks/prd-writeassist-review-workbench.md` — current product requirements document
