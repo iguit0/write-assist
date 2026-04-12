@@ -7,7 +7,7 @@ WriteAssist will pivot from a system-wide inline assistant toward a focused macO
 
 The primary workflow is explicit review, not passive monitoring:
 - the user writes or pastes text into WriteAssist
-- optionally imports selected text from another app via a deliberate “Review Selection” action
+- optionally imports selected text from another app via a deliberate “Review Selection” action that first opens a lightweight review panel
 - runs a full review pass over the text
 - inspects issues by sentence and paragraph
 - requests rewrites on demand
@@ -56,7 +56,7 @@ These commands must pass for every user story:
 
 **Acceptance Criteria:**
 - [ ] The app exposes a menu bar or shortcut-driven “Review Selection” action.
-- [ ] The action imports the current text selection once, into the main review window.
+- [ ] The action imports the current text selection once, into a lightweight review panel with a clear path to the main review window.
 - [ ] The feature does not depend on permanent selection polling or continuous typing capture.
 - [ ] If selection import is unavailable, the app fails gracefully with a user-facing message.
 
@@ -118,7 +118,7 @@ These commands must pass for every user story:
 
 - FR-1: The system must provide a main review window as the primary app surface.
 - FR-2: The system must support manual writing and paste-in review.
-- FR-3: The system must support explicit one-shot selection import from another app.
+- FR-3: The system must support explicit one-shot selection import from another app into a lightweight review panel, with an explicit handoff to the main workspace.
 - FR-4: The system must run deterministic review analysis against the current review text.
 - FR-5: The system must present issues grouped in a way that supports sentence- and paragraph-level review.
 - FR-6: The system must support explicit sentence- and paragraph-level rewrite actions.

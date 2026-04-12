@@ -8,7 +8,8 @@ import SwiftUI
 private let logger = Logger(subsystem: "com.writeassist", category: "StatusBarController")
 
 /// Manages the macOS menu bar status item in launcher-only mode.
-/// Exposes three actions: Open Review, Review Selection, and Settings.
+/// Exposes Review Selection as the primary action, with workspace and settings
+/// as secondary actions.
 /// No popover, no ambient monitors, no floating panels.
 @MainActor
 public final class StatusBarController: NSObject, @unchecked Sendable {
@@ -22,7 +23,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
 
     /// Creates the status item with a plain NSMenu.
     public func setupLauncher(
-        onOpenReview: @escaping @MainActor () -> Void,
+        onOpenWorkspace: @escaping @MainActor () -> Void,
         onReviewSelection: @escaping @MainActor () -> Void,
         onOpenSettings: @escaping @MainActor () -> Void
     ) {
@@ -39,25 +40,26 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
 
         let menu = NSMenu()
 
-        let openReviewHandler = MenuActionHandler(action: onOpenReview)
-        let openReviewItem = NSMenuItem(
-            title: "Open Review",
-            action: #selector(MenuActionHandler.handleAction),
-            keyEquivalent: ""
-        )
-        openReviewItem.target = openReviewHandler
-        menu.addItem(openReviewItem)
-
-        menu.addItem(.separator())
-
         let reviewSelectionHandler = MenuActionHandler(action: onReviewSelection)
         let reviewSelectionItem = NSMenuItem(
             title: "Review Selection",
             action: #selector(MenuActionHandler.handleAction),
-            keyEquivalent: ""
+            keyEquivalent: "r"
         )
         reviewSelectionItem.target = reviewSelectionHandler
+        reviewSelectionItem.keyEquivalentModifierMask = [.control, .option, .command]
         menu.addItem(reviewSelectionItem)
+
+        menu.addItem(.separator())
+
+        let openWorkspaceHandler = MenuActionHandler(action: onOpenWorkspace)
+        let openWorkspaceItem = NSMenuItem(
+            title: "Open Workspace",
+            action: #selector(MenuActionHandler.handleAction),
+            keyEquivalent: ""
+        )
+        openWorkspaceItem.target = openWorkspaceHandler
+        menu.addItem(openWorkspaceItem)
 
         menu.addItem(.separator())
 
@@ -83,7 +85,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         item.menu = menu
 
         // Retain handlers for the lifetime of the menu
-        launcherMenuHandlers = [openReviewHandler, reviewSelectionHandler, openSettingsHandler]
+        launcherMenuHandlers = [reviewSelectionHandler, openWorkspaceHandler, openSettingsHandler]
 
         logger.info("StatusBarController: launcher mode active")
     }
@@ -121,9 +123,6 @@ private final class MenuActionHandler: NSObject {
     }
 
     @objc @MainActor func handleAction() {
-        let closure = action
-        Task { @MainActor in
-            closure()
-        }
+        action()
     }
 }

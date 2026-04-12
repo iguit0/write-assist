@@ -3,7 +3,9 @@
 
 import SwiftUI
 
-struct SettingsPanel: View {
+public struct SettingsPanel: View {
+    public init() {}
+
     @State private var prefs = PreferencesManager.shared
     @State private var aiService = CloudAIService.shared
     @State private var isRuleTogglesExpanded = false
@@ -14,7 +16,7 @@ struct SettingsPanel: View {
     @State private var isLoadingModels = false
     @State private var ollamaReachable: Bool?
 
-    var body: some View {
+    public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 settingsSection(title: "AI Provider", icon: "sparkles") {

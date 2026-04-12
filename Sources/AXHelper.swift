@@ -8,7 +8,7 @@ import Carbon.HIToolbox
 /// can be called from background threads and detached tasks without actor hopping.
 /// Each function encapsulates the repetitive "get focused element → guard type →
 /// read attribute" pattern that was duplicated across 4+ call sites (#020).
-enum AXHelper {
+public enum AXHelper {
     enum InspectionDecision: Equatable {
         case allow
         case denySecureInput
@@ -129,6 +129,14 @@ enum AXHelper {
     }
 
     // MARK: - Caret Bounds
+
+    /// Returns the screen `CGRect` (AX coordinate space, top-left origin) for the
+    /// currently selected text in the focused element. Returns `nil` on any failure.
+    public nonisolated static func selectedTextBounds(skipSelf: Bool = false) -> CGRect? {
+        guard let element = focusedElement(skipSelf: skipSelf) else { return nil }
+        guard let rangeRef = selectedRangeRef(of: element) else { return nil }
+        return bounds(for: rangeRef, in: element)
+    }
 
     /// Returns the screen `CGRect` (AX coordinate space, top-left origin) of
     /// the text caret in the currently focused element. Returns `nil` on any failure.

@@ -8,7 +8,7 @@ A local-first macOS writing assistant built around a **Review Workbench** — an
 
 - **Review Workbench** — paste or import text into a dedicated window; run a local spell/grammar/style check; inspect issues by paragraph and sentence; apply deterministic fixes locally.
 - **Explicit AI rewrites** — select a sentence or paragraph, choose a rewrite mode (Fix Grammar, Natural, Shorter, Formal), and request a rewrite via Ollama (local) or a configured cloud provider.
-- **Review Selection** — one-shot import of selected text from any app via Accessibility API; opens the workbench and runs a review automatically.
+- **Review Selection** — one-shot import of selected text from any app via Accessibility API; opens a lightweight review panel first, with the full workspace available when you want deeper editing or rewrites.
 - **Local-first** — all passive checks are on-device; cloud AI is invoked only on explicit user request.
 - **Loopback-only Ollama** — local model traffic is restricted to `localhost` / loopback.
 
@@ -52,10 +52,11 @@ WriteAssist needs Accessibility access for the **Review Selection** feature, whi
 
 ## How It Works
 
-1. The **menu bar launcher** provides four actions: Open Review, Review Selection, Settings, Quit.
-2. **Open Review** opens the Review Workbench window.
-3. **Review Selection** imports the current selection from the focused app via AX and opens the workbench.
-4. Inside the workbench, **DeterministicReviewEngine** runs a local spell + grammar + style pipeline.
+1. The **menu bar launcher** provides four actions: Review Selection, Open Workspace, Settings, Quit.
+2. **Review Selection** is the primary path. It imports the current selection from the focused app via AX, opens a lightweight review panel, and can also be triggered globally with **⌃⌥⌘R**.
+3. **Open Workspace** opens the full Review Workbench window directly.
+4. The review panel shows a quick, compact issue summary near your current context without forcing a document window.
+5. Inside the workbench, **DeterministicReviewEngine** runs a local spell + grammar + style pipeline.
 5. **ReviewGrouping** organises results by paragraph and sentence.
 6. **ReviewSessionStore** owns the document, analysis lifecycle, selection state, and the single local mutation path.
 7. **LocalFirstRewriteEngine** rewrites selected text via Ollama first, with optional cloud fallback.

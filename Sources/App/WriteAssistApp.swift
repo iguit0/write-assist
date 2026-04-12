@@ -10,7 +10,8 @@ struct WriteAssistApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            SettingsPanel()
+                .frame(minWidth: 520, minHeight: 420)
         }
     }
 }
@@ -20,9 +21,12 @@ struct WriteAssistApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shell: AppShellController?
     private var statusBarController: StatusBarController?
+    private var reviewSelectionHotKeyController: ReviewSelectionHotKeyController?
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+
         let shellController = AppShellController()
         shell = shellController
 
@@ -30,16 +34,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = controller
 
         controller.setupLauncher(
-            onOpenReview: { [weak shellController] in
-                shellController?.openReviewWindow()
+            onOpenWorkspace: { [weak shellController] in
+                shellController?.openWorkspaceWindow()
             },
             onReviewSelection: { [weak shellController] in
-                Task { await shellController?.reviewSelection() }
+                shellController?.triggerReviewSelection()
             },
             onOpenSettings: { [weak shellController] in
                 shellController?.openSettings()
             }
         )
+
+        let hotKeyController = ReviewSelectionHotKeyController(onActivate: { [weak shellController] in
+            shellController?.triggerReviewSelection()
+        })
+        hotKeyController.start()
+        reviewSelectionHotKeyController = hotKeyController
 
         shellController.start(statusBarController: controller)
         NSApp.setActivationPolicy(.accessory)
@@ -48,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func applicationWillTerminate(_ notification: Notification) {
         WritingStatsStore.shared.endSession()
+        reviewSelectionHotKeyController?.stop()
+        reviewSelectionHotKeyController = nil
         statusBarController?.teardown()
         shell?.stop()
     }

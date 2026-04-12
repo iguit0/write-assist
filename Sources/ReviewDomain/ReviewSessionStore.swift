@@ -68,6 +68,10 @@ public final class ReviewSessionStore {
             revision: document.revision + 1,
             updatedAt: Date()
         )
+        selectedIssueID = nil
+        selectedParagraphID = nil
+        selectedSentenceID = nil
+        selectedEditorRange = nil
         analysisState = .idle
         if autoReview && !newText.isEmpty {
             requestReview(trigger: trigger)
