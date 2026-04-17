@@ -4,10 +4,17 @@
 import SwiftUI
 
 public struct SettingsPanel: View {
+    private enum SettingsTab: Hashable {
+        case general
+        case writing
+        case ai
+    }
+
     public init() {}
 
     @State private var prefs = PreferencesManager.shared
     @State private var aiService = CloudAIService.shared
+    @State private var selectedTab: SettingsTab = .general
     @State private var isRuleTogglesExpanded = false
     @State private var apiKeyInput = ""
     @State private var isTestingConnection = false
@@ -17,99 +24,181 @@ public struct SettingsPanel: View {
     @State private var ollamaReachable: Bool?
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                settingsSection(title: "AI Provider", icon: "sparkles") {
-                    Picker("Provider", selection: $aiService.provider) {
-                        Text("Anthropic").tag(AIProvider.anthropic)
-                        Text("OpenAI").tag(AIProvider.openai)
-                        Text("Ollama").tag(AIProvider.ollama)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .onChange(of: aiService.provider) {
-                        connectionTestResult = nil
-                        if aiService.provider == .ollama {
-                            checkOllamaStatus()
-                        }
-                    }
+        TabView(selection: $selectedTab) {
+            Tab("General", systemImage: "gearshape", value: .general) {
+                generalTabContent
+            }
+
+            Tab("Writing", systemImage: "pencil.line", value: .writing) {
+                writingTabContent
+            }
+
+            Tab("AI", systemImage: "sparkles", value: .ai) {
+                aiTabContent
+            }
+        }
+        .onAppear {
+            if aiService.provider == .ollama {
+                checkOllamaStatus()
+            }
+        }
+    }
+
+    private var generalTabContent: some View {
+        tabScrollContent {
+            settingsSection(title: "Current Setup", icon: "list.bullet.rectangle") {
+                VStack(alignment: .leading, spacing: 8) {
+                    summaryRow("Writing Preset", value: prefs.writingPreset.rawValue)
+                    summaryRow("Formality", value: prefs.formalityLevel.rawValue)
+                    summaryRow("Audience", value: prefs.audienceLevel.rawValue)
+                    summaryRow("AI Provider", value: aiService.provider.rawValue)
 
                     if aiService.provider == .ollama {
-                        ollamaSettingsContent
+                        summaryRow("Server", value: aiService.ollamaBaseURL)
+                        summaryRow(
+                            "Model",
+                            value: aiService.ollamaModelName.isEmpty ? "No model selected" : aiService.ollamaModelName
+                        )
+                        summaryRow("Status", value: ollamaStatusSummary)
                     } else {
-                        cloudSettingsContent
+                        summaryRow("Model", value: currentCloudModelName)
+                        summaryRow("Access", value: aiService.hasAPIKey() ? "API key configured" : "No API key")
+                    }
+                }
+            }
+
+            settingsSection(title: "Privacy & Usage", icon: "lock.shield") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Passive spell checks stay local.")
+                    Text("Cloud AI runs only when you explicitly request suggestions or rewrites.")
+                    Text("Ollama connections are restricted to localhost addresses for safety.")
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private var writingTabContent: some View {
+        tabScrollContent {
+            settingsSection(title: "Writing Preset", icon: "doc.text") {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                    spacing: 6
+                ) {
+                    ForEach(WritingPreset.allCases, id: \.self) { preset in
+                        pillButton(
+                            preset.rawValue,
+                            isSelected: prefs.writingPreset == preset
+                        ) { prefs.writingPreset = preset }
+                    }
+                }
+            }
+
+            settingsSection(title: "Formality", icon: "slider.horizontal.3") {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                    spacing: 6
+                ) {
+                    ForEach(FormalityLevel.allCases, id: \.self) { level in
+                        pillButton(
+                            level.rawValue,
+                            isSelected: prefs.formalityLevel == level
+                        ) { prefs.formalityLevel = level }
+                    }
+                }
+            }
+
+            settingsSection(title: "Audience", icon: "person.2") {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
+                    spacing: 6
+                ) {
+                    ForEach(AudienceLevel.allCases, id: \.self) { level in
+                        pillButton(
+                            level.rawValue,
+                            isSelected: prefs.audienceLevel == level
+                        ) { prefs.audienceLevel = level }
+                    }
+                }
+            }
+
+            settingsSection(title: "Rules", icon: "checklist") {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isRuleTogglesExpanded.toggle()
+                    }
+                } label: {
+                    HStack {
+                        Text(isRuleTogglesExpanded ? "Hide rules" : "Show rules")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Image(systemName: isRuleTogglesExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isRuleTogglesExpanded {
+                    VStack(spacing: 4) {
+                        ForEach(RuleRegistry.allRules, id: \.ruleID) { rule in
+                            ruleToggleRow(rule: rule)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var aiTabContent: some View {
+        tabScrollContent {
+            settingsSection(title: "AI Provider", icon: "sparkles") {
+                Picker("Provider", selection: $aiService.provider) {
+                    Text("Anthropic").tag(AIProvider.anthropic)
+                    Text("OpenAI").tag(AIProvider.openai)
+                    Text("Ollama").tag(AIProvider.ollama)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: aiService.provider) {
+                    connectionTestResult = nil
+                    if aiService.provider == .ollama {
+                        checkOllamaStatus()
                     }
                 }
 
-                settingsSection(title: "Writing Preset", icon: "doc.text") {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
-                        spacing: 6
-                    ) {
-                        ForEach(WritingPreset.allCases, id: \.self) { preset in
-                            pillButton(
-                                preset.rawValue,
-                                isSelected: prefs.writingPreset == preset
-                            ) { prefs.writingPreset = preset }
-                        }
-                    }
+                if aiService.provider == .ollama {
+                    ollamaSettingsContent
+                } else {
+                    cloudSettingsContent
                 }
+            }
+        }
+    }
 
-                settingsSection(title: "Formality", icon: "slider.horizontal.3") {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
-                        spacing: 6
-                    ) {
-                        ForEach(FormalityLevel.allCases, id: \.self) { level in
-                            pillButton(
-                                level.rawValue,
-                                isSelected: prefs.formalityLevel == level
-                            ) { prefs.formalityLevel = level }
-                        }
-                    }
-                }
+    private var currentCloudModelName: String {
+        let modelName = aiService.provider == .anthropic
+            ? prefs.anthropicModelName
+            : prefs.openAIModelName
+        return modelName.isEmpty ? "Not set" : modelName
+    }
 
-                settingsSection(title: "Audience", icon: "person.2") {
-                    LazyVGrid(
-                        columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3),
-                        spacing: 6
-                    ) {
-                        ForEach(AudienceLevel.allCases, id: \.self) { level in
-                            pillButton(
-                                level.rawValue,
-                                isSelected: prefs.audienceLevel == level
-                            ) { prefs.audienceLevel = level }
-                        }
-                    }
-                }
+    private var ollamaStatusSummary: String {
+        guard let reachable = ollamaReachable else {
+            return "Checking..."
+        }
+        return reachable ? "Connected" : "Not running"
+    }
 
-                settingsSection(title: "Rules", icon: "checklist") {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isRuleTogglesExpanded.toggle()
-                        }
-                    } label: {
-                        HStack {
-                            Text(isRuleTogglesExpanded ? "Hide rules" : "Show rules")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: isRuleTogglesExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    if isRuleTogglesExpanded {
-                        VStack(spacing: 4) {
-                            ForEach(RuleRegistry.allRules, id: \.ruleID) { rule in
-                                ruleToggleRow(rule: rule)
-                            }
-                        }
-                    }
-                }
+    private func tabScrollContent<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                content()
             }
             .padding(16)
         }
@@ -131,6 +220,19 @@ public struct SettingsPanel: View {
                     .foregroundStyle(.secondary)
             }
             content()
+        }
+    }
+
+    private func summaryRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
     }
 
@@ -295,7 +397,6 @@ public struct SettingsPanel: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .onAppear { checkOllamaStatus() }
     }
 
     private var cloudSettingsContent: some View {
@@ -373,10 +474,6 @@ public struct SettingsPanel: View {
                     }
                 }
             }
-
-            Text("Cloud AI runs only when you explicitly request suggestions or rewrites. Passive spell checks stay local.")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
         }
     }
 
