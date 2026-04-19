@@ -2,8 +2,6 @@
 
 A local-first macOS writing assistant built around a **Review Workbench** — an explicit, document-centric review and rewrite workflow.
 
-> **Architecture direction**: WriteAssist has pivoted from a system-wide ambient monitor to a review-first, local-first workbench. See [`tasks/prd-writeassist-review-workbench.md`](tasks/prd-writeassist-review-workbench.md) for the current product requirements.
-
 ## What it does
 
 - **Review Workbench** — paste or import text into a dedicated window; run a local spell/grammar/style check; inspect issues by paragraph and sentence; apply deterministic fixes locally.
@@ -98,13 +96,6 @@ WriteAssist/
 ```
 
 > **Legacy note**: `GlobalInputMonitor`, `SelectionMonitor`, `ExternalSpellChecker`, `ErrorHUDPanel`, `SelectionSuggestionPanel`, `UndoToastPanel`, and related files represent the old ambient inline-monitor path. They are kept compilable for reference but are no longer the primary product surface. The app boots in `reviewWorkbenchOnly` mode by default.
-
-## Source-of-truth docs
-
-- [`tasks/prd-writeassist-review-workbench.md`](tasks/prd-writeassist-review-workbench.md) — product requirements
-- [`docs/architecture/review-workbench-target-architecture.md`](docs/architecture/review-workbench-target-architecture.md) — target architecture
-- [`docs/plans/review-workbench-migration-plan.md`](docs/plans/review-workbench-migration-plan.md) — migration plan
-- [`tasks/review-workbench/README.md`](tasks/review-workbench/README.md) — implementation ticket index
 
 ## Linting
 
