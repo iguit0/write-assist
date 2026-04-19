@@ -3,54 +3,72 @@
 This file is the source of truth for contributor/agent behavior in this repo. It is grounded in the current code, not README/CLAUDE drift.
 
 ## Architecture + layout
-- Two targets: **WriteAssistCore** (Sources/ except App) and **WriteAssist** (Sources/App entry point). Tests import **WriteAssistCore**.
-- AppKit + SwiftUI hybrid: menu-bar popover is SwiftUI; status item, HUD panels, selection panels, global monitors, and AX interactions are AppKit.
-- DocumentViewModel (@Observable, @MainActor) is the coordinator for text buffer, checks, corrections, stats, and HUD gating.
-- Keep new source under `Sources/`; only `WriteAssistApp.swift` lives in `Sources/App/`.
+- Two targets: **WriteAssistCore** (`Sources/` except `App/`) and **WriteAssist** (`Sources/App/`). Tests import **WriteAssistCore**.
+- `Sources/App/` is executable-shell code (not just `WriteAssistApp.swift`): `WriteAssistApp`, `AppShellController`, review-selection panel controller, and global hotkey controller.
+- Keep product code under `Sources/`, grouped by current domains:
+  - `ReviewDomain/`, `ReviewServices/`, `ReviewWindow/`, `ReviewPanel/`, `Rewrite/`, `SystemIntegration/`, `WritingRules/`.
+- Core session coordinators are:
+  - `ReviewSessionStore` (document + analysis state)
+  - `RewriteSessionStore` (rewrite lifecycle)
+  - `ReviewSelectionPanelStore` (selection-panel phase + rewrite trigger state)
 
 ## Concurrency + threading
-- **Swift 6 strict concurrency**. Mutable UI/state lives on `@MainActor` (see DocumentViewModel, SpellCheckService, etc.).
-- Use `@preconcurrency import AppKit` where needed; prefer `@MainActor` over ad‑hoc dispatch.
-- If you need background work, snapshot `@MainActor` state first, then pass immutable data into `Task.detached` or `nonisolated` helpers (see `RuleRegistry.runAll` overload).
+- **Swift 6 strict concurrency**. Mutable app/session state lives on `@MainActor` stores and services.
+- Prefer `@MainActor` isolation and explicit state snapshots over ad-hoc queue hopping.
+- Keep staleness/cancellation guards when touching async flows (generation counters in `ReviewSessionStore` and `AppShellController`).
+- Use `Task.detached` only with immutable snapshotted inputs (`DeterministicReviewEngine` + `RuleRegistry.runAll(...disabledRules:)`).
+- `AXHelper` exposes `nonisolated static` helpers for AX reads; keep AX utility logic centralized there.
+- `NSSpellChecker` access must remain on the main actor (`SpellCheckService`), with timeout-protected async orchestration.
+
+## Review + rewrite flow
+- Mutate review text only through `ReviewSessionStore.replaceText` / `applyReplacement`.
+- Selection import is one-shot via `SelectionImportService.importCurrentSelection()`; do not add persistent polling/observers.
+- Keep the launcher-first flow:
+  - status bar action/hotkey -> `AppShellController.triggerReviewSelection()`
+  - import into selection panel store -> optional workspace handoff.
+- Selection-panel rewrite accept currently applies to source apps via pasteboard write + synthetic Cmd+V in `AppShellController`; keep this behavior consistent unless intentionally redesigning replacement flow.
 
 ## Writing rules
-- Each rule is its own file in `Sources/WritingRules/` implementing `WritingRule`.
-- **Stable `ruleID`** is required — used by preferences and ignore rules.
-- Add new rules to `RuleRegistry.allRules` to make them active.
-- Prefer `NLAnalysisService.analyze` output; do not recreate NLP pipelines per rule.
-- Phrase lists or word pairs must live in `Sources/Resources/` JSON and load via `Bundle.module` (see `ConfusedWordRule`, `FormalityRule`, `InclusiveLanguageRule`). Update `Package.swift` if you add new resources.
+- Each rule lives in its own file in `Sources/WritingRules/` and conforms to `WritingRule`.
+- **Stable `ruleID` is required** (used by preferences and issue identity).
+- Add new rules to `RuleRegistry.allRules` or they will not run.
+- Reuse `NLAnalysisService.analyze` output; do not create new NLP pipelines per rule.
+- Word/phrase resources belong in `Sources/Resources/*.json`, loaded via `Bundle.module`. Update `Package.swift` resources if needed.
 
-## AI + spell check
-- All AI calls go through `CloudAIService` (provider routing, TLS pinning, rate limiting, keychain storage). Don’t call OpenAI/Anthropic/Ollama directly.
-- Generate prompts via `AIPromptTemplates` so tone/style stays centralized.
-- API keys are stored via `KeychainHelper` only.
-- `SpellCheckService` wraps `NSSpellChecker` with main-actor guard + timeout. Keep expensive work off the main thread, but do not touch NSSpellChecker from background threads.
+## AI + security
+- Route provider calls through `CloudAIService` (and `OllamaService` only through that boundary), not ad-hoc API clients.
+- Keep prompt construction centralized in `AIPromptTemplates`.
+- API keys must use `KeychainHelper`.
+- Preserve TLS pinning behavior in `CloudAIService` for cloud providers.
+- Preserve Ollama safety guard (`localhost` / loopback-only URL policy).
+- Rewrite provider policy is local-first (`LocalFirstRewriteEngine`): try Ollama, then configured cloud fallback.
 
 ## UI / AppKit boundary
-- Status bar, HUD, selection panel, and global monitors are owned by `StatusBarController` and related panel classes. Avoid introducing new global monitors unless strictly necessary.
-- HUD/selection panels are non‑activating `NSPanel`s anchored to caret bounds via AX APIs (`AXHelper`, `PanelPositioning`).
-- Corrections use AX text replacement first, then clipboard+synthetic paste fallback. Keep this flow consistent.
+- Status item/menu is owned by `StatusBarController` in launcher mode (no popover/global monitor architecture).
+- Selection review UI is a non-activating `NSPanel` (`ReviewSelectionPanelController`) anchored using AX selection bounds.
+- Workspace UI is SwiftUI (`ReviewWorkbenchView` and related `ReviewWindow/` views) hosted in AppKit windows via `AppShellController`.
 
 ## Persistence + singletons
-- Preferences and stores are singletons: `PreferencesManager`, `IgnoreRulesStore`, `PersonalDictionary`, `WritingStatsStore`. Use existing stores instead of new persistence layers.
-- Keep storage keys and on-disk formats stable; migrate explicitly if you must change them.
+- Reuse existing singletons/stores instead of adding new persistence layers:
+  - `PreferencesManager`, `IgnoreRulesStore`, `PersonalDictionary`, `WritingStatsStore`, `CloudAIService`.
+- Keep storage keys and formats stable (`UserDefaults`, Application Support JSON files, keychain). If you must change format, add explicit migration behavior.
 
 ## Logging + style
 - Use `Logger(subsystem: "com.writeassist", category: "<Type>")` per file.
-- File header format is required:
-  ```
-  // WriteAssist — macOS menu bar writing assistant
-  // Copyright © 2025 Igor Alves. All rights reserved.
-  ```
-- SwiftLint: `trailing_comma` and `line_length` are disabled; `empty_count` and `closure_spacing` are enabled. Don’t add code that violates the lint config.
+- Keep the standard file header style used across `Sources/` files.
+- SwiftLint config:
+  - disabled: `trailing_comma`, `line_length`
+  - opt-in: `empty_count`, `closure_spacing`
 
 ## Tests
 - Tests live in `Tests/WriteAssistTests` and use Swift **Testing** (`@Suite`, `@Test`).
-- Import `WriteAssistCore` and use real `NLAnalysisService.analyze` for rule tests.
+- Import `WriteAssistCore` in tests.
+- For writing-rule tests, prefer real `NLAnalysisService.analyze` coverage (see `WritingRuleTests.swift`).
 
-## Docs / known issues
-- `docs/plans/` contains recent plans; `issues/` contains active pain points. Prefer aligning new changes to these constraints.
-- If `CLAUDE.md` or `README.md` disagree with code, follow the code.
+## Docs / planning
+- Active product planning docs are currently under `tasks/`.
+- `docs/` contains structure folders (`architecture/`, `plans/`, `superpowers/`) but may be sparse.
+- If docs disagree with code, follow the code.
 
 ## Commit
 Always follow conventional commit pattern. Do not commit more than 160 characters.
