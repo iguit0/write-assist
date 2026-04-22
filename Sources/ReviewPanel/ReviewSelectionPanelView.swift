@@ -1,6 +1,7 @@
 // WriteAssist — macOS menu bar writing assistant
 // Copyright © 2025 Igor Alves. All rights reserved.
 
+import AppKit
 import SwiftUI
 
 // MARK: - Main View
@@ -145,12 +146,37 @@ struct PanelErrorView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Dismiss", action: onDismiss)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            if case .accessibilityDenied = error {
+                HStack(spacing: 8) {
+                    Button {
+                        openAccessibilitySettings()
+                    } label: {
+                        Label("Open Settings", systemImage: "gear")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Dismiss", action: onDismiss)
+                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            } else {
+                Button("Dismiss", action: onDismiss)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(24)
+    }
+
+    private func openAccessibilitySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 

@@ -15,7 +15,7 @@ extension SelectionImportError {
     public var userFacingMessage: String {
         switch self {
         case .accessibilityDenied:
-            return "WriteAssist needs Accessibility permission. Enable it in System Settings → Privacy & Security → Accessibility."
+            return "WriteAssist needs Accessibility permission to read selected text from other apps."
         case .secureContext:
             return "The focused field is secure (e.g. a password field) and cannot be imported."
         case .noFocusedElement:
