@@ -57,4 +57,3 @@ macOS menu bar writing assistant — review-and-rewrite workbench for non-native
 - `Sources/SystemIntegration/` — one-shot `SelectionImportService`
 - `Sources/WritingRules/` — individual deterministic rule implementations
 - `Sources/Resources/` — JSON data files for rules
-- `tasks/prd-writeassist-review-workbench.md` — current product requirements document
