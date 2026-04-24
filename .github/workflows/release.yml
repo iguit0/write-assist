@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build & publish DMG
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Resolve version & channel from tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          FILE_VERSION="$(cat VERSION)"
+
+          # Validate: VERSION file must equal tag's base (minus any -preview.N)
+          BASE_VERSION="${VERSION%%-*}"
+          if [ "${BASE_VERSION}" != "${FILE_VERSION}" ]; then
+            echo "::error::Tag ${TAG} (base ${BASE_VERSION}) does not match VERSION file (${FILE_VERSION})"
+            exit 1
+          fi
+
+          if [[ "${VERSION}" == *-preview.* ]]; then
+            CHANNEL=preview
+            PRERELEASE=true
+          else
+            CHANNEL=stable
+            PRERELEASE=false
+          fi
+
+          echo "version=${VERSION}"         >> "$GITHUB_OUTPUT"
+          echo "channel=${CHANNEL}"         >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}"   >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"                 >> "$GITHUB_OUTPUT"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build .app
+        run: ./scripts/build-app.sh "${{ steps.meta.outputs.version }}" "${GITHUB_RUN_NUMBER}"
+
+      - name: Build DMG
+        run: ./scripts/make-dmg.sh "${{ steps.meta.outputs.version }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: WriteAssist ${{ steps.meta.outputs.version }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          generate_release_notes: true
+          body: |
+            > **BETA / Preview build — not yet notarized by Apple.**
+            > On first launch macOS Gatekeeper will block the app. See the
+            > [install instructions](https://github.com/${{ github.repository }}/blob/main/RELEASING.md#installing-a-beta-build)
+            > for how to allow it (one-time, takes ~10 seconds).
+          files: |
+            build/WriteAssist-${{ steps.meta.outputs.version }}.dmg
