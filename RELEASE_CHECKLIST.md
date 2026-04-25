@@ -89,7 +89,7 @@ Every time you cut a release — preview or stable — run this block first.
 - [ ] Download the DMG from the release page, install it, run through the tester bypass flow yourself — confirm the app launches
 - [ ] Share the direct DMG URL with testers:
   ```
-  https://github.com/<owner>/WriteAssist/releases/download/v0.1.0-preview.1/WriteAssist-0.1.0-preview.1.dmg
+  https://github.com/iguit0/WriteAssist/releases/download/v0.1.0-preview.1/WriteAssist-0.1.0-preview.1.dmg
   ```
   Also point them at `RELEASING.md § Installing a BETA build` for the Gatekeeper bypass.
 

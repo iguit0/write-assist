@@ -10,4 +10,4 @@ All notable changes to WriteAssist are documented here. The format follows [Keep
 - Release automation scripts under `scripts/`.
 - `RELEASING.md`, `BRANCHING.md`, and `docs/ci-cd.md`.
 
-[Unreleased]: https://github.com/<owner>/WriteAssist/compare/HEAD
+[Unreleased]: https://github.com/iguit0/WriteAssist/compare/HEAD

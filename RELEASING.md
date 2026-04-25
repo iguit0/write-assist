@@ -29,7 +29,7 @@ Both produce an ad-hoc signed `.dmg` attached to a GitHub Release. Preview is ma
 6. When green, the release appears on the [Releases page](../../releases) marked **Pre-release**.
 7. Share the direct DMG link with testers (plus the install instructions below):
    ```
-   https://github.com/<owner>/WriteAssist/releases/download/v0.2.0-preview.1/WriteAssist-0.2.0-preview.1.dmg
+   https://github.com/iguit0/WriteAssist/releases/download/v0.2.0-preview.1/WriteAssist-0.2.0-preview.1.dmg
    ```
 
 ## Cutting a stable release
