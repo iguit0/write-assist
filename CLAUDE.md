@@ -2,6 +2,8 @@
 
 macOS menu bar writing assistant — review-and-rewrite workbench for non-native English speakers.
 
+See `AGENTS.md` for full contributor/agent conventions (concurrency rules, AI routing, packaging) — this file is a digest.
+
 ## Build & Lint
 
 - `swift build` — compile (must pass with zero errors/warnings)
@@ -10,6 +12,11 @@ macOS menu bar writing assistant — review-and-rewrite workbench for non-native
 - `swift test` — run unit tests (must pass)
 - Tests use Swift Testing framework (`import Testing`, `@Test`, `#expect`) — not XCTest
 - Test target imports `@testable import WriteAssistCore`
+- `scripts/build-app.sh <version>` — assemble universal `.app` bundle (ad-hoc signed)
+- `scripts/make-dmg.sh <version>` — package `.app` into DMG (requires `brew install create-dmg`)
+- `scripts/make-icns.sh` — regenerate `AppIcon.icns` from PNGs in `assets/`
+- `VERSION` file must match release tag's base (e.g. `v0.1.0` or `v0.1.0-preview.1`)
+- Global hotkey for "Review Selection": `Control+Option+Command+R`
 
 ## Architecture
 
@@ -29,9 +36,13 @@ macOS menu bar writing assistant — review-and-rewrite workbench for non-native
 - `DeterministicReviewEngine` wraps `SpellCheckService`, `NLAnalysisService`, `RuleEngine`, and `WritingRules/*`; produces a `ReviewAnalysisSnapshot` keyed by `documentRevision`
 - `SelectionImportService` is a one-shot AX import — no background polling
 - Writing rules in `Sources/WritingRules/` — each is a separate rule file
-- JSON resources in `Sources/Resources/` (excluded from target in Package.swift, loaded at runtime)
+- Resources in `Sources/Resources/` are processed by SPM (`resources: [.process("Resources")]`) and loaded at runtime via `Bundle.module`
 - `ReviewSelectionHotKeyController` registers a global Carbon hotkey to trigger review selection
 - `ReviewSelectionPanelController` manages the floating review-selection panel NSWindow
+- New writing rules **must** be registered in `RuleRegistry.allRules`, or they won't run
+- Mutate review text only via `ReviewSessionStore.replaceText` / `applyReplacement` — never write to the document directly
+- Selection-panel rewrite accept applies to the source app via pasteboard write + synthetic `Cmd+V` in `AppShellController`
+- Do **not** read `PreferencesManager.shared` from nonisolated rule execution (`RuleRegistry.runAll`)
 
 ## State Ownership
 
@@ -45,6 +56,15 @@ macOS menu bar writing assistant — review-and-rewrite workbench for non-native
 - File header: `// WriteAssist — macOS menu bar writing assistant` + copyright line
 - SwiftLint: `trailing_comma` and `line_length` disabled; `empty_count` and `closure_spacing` opted in
 - Logger subsystem: `com.writeassist`
+- Commits: conventional commits, message ≤160 chars
+
+## AI & Security
+
+- All cloud provider calls route through `CloudAIService`; prompts via `AIPromptTemplates` — no ad-hoc clients
+- API keys via `KeychainHelper` with keys `anthropic_api_key` / `openai_api_key`
+- `OllamaService` rejects non-localhost URLs (`localhost`, `127.0.0.1`, `::1` only)
+- `CloudAIService` enforces TLS certificate pinning for Anthropic/OpenAI hosts — preserve this
+- Cloud AI is explicit-user-action only; do not add passive background cloud calls
 
 ## Project Layout
 
