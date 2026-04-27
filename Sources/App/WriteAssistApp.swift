@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onOpenSettings: { [weak shellController] in
                 shellController?.openSettings()
+            },
+            onOpenAbout: { [weak shellController] in
+                shellController?.openAbout()
             }
         )
 

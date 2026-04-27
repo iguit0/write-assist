@@ -23,6 +23,7 @@ public final class AppShellController {
     private var reviewWindowController: NSWindowController?
     private var reviewSelectionPanelController: ReviewSelectionPanelController?
     private var settingsWindowController: NSWindowController?
+    private var aboutWindowController: NSWindowController?
     private var reviewSelectionTask: Task<Void, Never>?
     private var reviewSelectionGeneration = 0
     private let panelRewriteStore: RewriteSessionStore
@@ -236,6 +237,30 @@ public final class AppShellController {
         )
         reviewSelectionPanelController = controller
         return controller
+    }
+
+    // MARK: - About
+
+    public func openAbout() {
+        if let existing = aboutWindowController {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let hostingController = NSHostingController(rootView: AboutPanel())
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "About WriteAssist"
+        window.styleMask = [.titled, .closable]
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        aboutWindowController = controller
+
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Settings

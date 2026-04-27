@@ -25,7 +25,8 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
     public func setupLauncher(
         onOpenWorkspace: @escaping @MainActor () -> Void,
         onReviewSelection: @escaping @MainActor () -> Void,
-        onOpenSettings: @escaping @MainActor () -> Void
+        onOpenSettings: @escaping @MainActor () -> Void,
+        onOpenAbout: @escaping @MainActor () -> Void
     ) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
@@ -72,6 +73,15 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         openSettingsItem.target = openSettingsHandler
         menu.addItem(openSettingsItem)
 
+        let openAboutHandler = MenuActionHandler(action: onOpenAbout)
+        let openAboutItem = NSMenuItem(
+            title: "About WriteAssist",
+            action: #selector(MenuActionHandler.handleAction),
+            keyEquivalent: ""
+        )
+        openAboutItem.target = openAboutHandler
+        menu.addItem(openAboutItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(
@@ -85,7 +95,7 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
         item.menu = menu
 
         // Retain handlers for the lifetime of the menu
-        launcherMenuHandlers = [reviewSelectionHandler, openWorkspaceHandler, openSettingsHandler]
+        launcherMenuHandlers = [reviewSelectionHandler, openWorkspaceHandler, openSettingsHandler, openAboutHandler]
 
         logger.info("StatusBarController: launcher mode active")
     }
@@ -99,7 +109,11 @@ public final class StatusBarController: NSObject, @unchecked Sendable {
 
     /// Resolves the status bar pencil icon by trying SF Symbol names in order of
     /// availability. Returns nil only when no symbols resolve (rare in production).
-    private func resolvedStatusBarIcon() -> NSImage? {
+    nonisolated private func resolvedStatusBarIcon() -> NSImage? {
+        if let img = Bundle.module.image(forResource: "write-assist-menubar-template") {
+            img.isTemplate = true
+            return img
+        }
         let symbolNames = ["pencil.and.sparkles", "pencil.circle.fill", "pencil"]
         for name in symbolNames {
             if let img = NSImage(systemSymbolName: name, accessibilityDescription: "WriteAssist") {
