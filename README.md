@@ -1,6 +1,10 @@
-# ✏️ WriteAssist
+<p align="center">
+  <img src=".github/write-assist-logo.png" width="128" alt="WriteAssist logo">
+</p>
 
-A local-first macOS writing assistant built around a **Review Workbench** — an explicit, document-centric review and rewrite workflow.
+<h1 align="center">WriteAssist</h1>
+
+<p align="center">A local-first macOS writing assistant built around a <strong>Review Workbench</strong> — an explicit, document-centric review and rewrite workflow.</p>
 
 ## What it does
 
@@ -50,7 +54,7 @@ WriteAssist needs Accessibility access for the **Review Selection** feature, whi
 
 ## How It Works
 
-1. The **menu bar launcher** provides four actions: Review Selection, Open Workspace, Settings, Quit.
+1. The **menu bar launcher** provides five actions: Review Selection, Open Workspace, Settings, About WriteAssist, Quit.
 2. **Review Selection** is the primary path. It imports the current selection from the focused app via AX, opens a lightweight review panel, and can also be triggered globally with **⌃⌥⌘R**.
 3. **Open Workspace** opens the full Review Workbench window directly.
 4. The review panel shows a quick, compact issue summary near your current context without forcing a document window.
